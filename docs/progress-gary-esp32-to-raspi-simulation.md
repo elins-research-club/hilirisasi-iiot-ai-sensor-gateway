@@ -11,7 +11,7 @@ Model LSTM penuh belum diimplementasikan pada tahap ini.
 Dataset lokal:
 
 ```text
-C:\vscode\IIOT Project\iiot-ai-sensor-gateway\iot_telemetry_data.csv
+C:\vscode\IIOT-Project\iiot-ai-sensor-gateway\iot_telemetry_data.csv
 ```
 
 Kolom Gary:
