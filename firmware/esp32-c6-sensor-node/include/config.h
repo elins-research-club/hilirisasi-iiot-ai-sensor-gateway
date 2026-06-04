@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #ifndef IIOT_NODE_ID
 #define IIOT_NODE_ID "node_01"

@@ -1,4 +1,4 @@
-﻿# IIoT AI Sensor Gateway
+# IIoT AI Sensor Gateway
 
 Repo ini berisi dua bagian yang saling tersambung untuk Industrial Environment Monitoring berbasis IIoT:
 

@@ -1,4 +1,4 @@
-﻿# Deployment Raspberry Pi
+# Deployment Raspberry Pi
 
 ## Paket Sistem
 

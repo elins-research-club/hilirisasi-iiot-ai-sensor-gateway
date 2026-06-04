@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from .contracts import FeatureVector
 from .features import FEATURE_NAMES

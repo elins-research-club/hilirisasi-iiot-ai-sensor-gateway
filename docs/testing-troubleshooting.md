@@ -1,4 +1,4 @@
-﻿# Testing dan Troubleshooting
+# Testing dan Troubleshooting
 
 ## Test Lokal
 

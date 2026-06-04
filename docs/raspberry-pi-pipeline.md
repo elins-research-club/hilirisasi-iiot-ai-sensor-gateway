@@ -1,4 +1,4 @@
-﻿# Pipeline Raspberry Pi dan Dataset Publik
+# Pipeline Raspberry Pi dan Dataset Publik
 
 Pipeline Raspberry Pi adalah preprocessing AI/pre-model. Ini bukan firmware ESP32 dan bukan preprocessing ringan yang berjalan di node.
 

@@ -1,4 +1,4 @@
-﻿#include "config.h"
+#include "config.h"
 #include "lora_e32.h"
 #include "payload.h"
 #include "preprocessing.h"

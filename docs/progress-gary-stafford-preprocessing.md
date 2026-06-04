@@ -1,4 +1,4 @@
-﻿# Progress Gary Stafford Preprocessing
+# Progress Gary Stafford Preprocessing
 
 ## Tujuan
 

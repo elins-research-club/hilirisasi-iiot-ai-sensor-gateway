@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from .buffer import NodeBuffer
 from .config import AppConfig

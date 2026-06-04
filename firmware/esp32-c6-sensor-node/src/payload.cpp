@@ -1,4 +1,4 @@
-﻿#include "payload.h"
+#include "payload.h"
 
 #include <stdio.h>
 #include "config.h"

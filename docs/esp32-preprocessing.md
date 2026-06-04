@@ -1,4 +1,4 @@
-﻿# Preprocessing ESP32-C6
+# Preprocessing ESP32-C6
 
 Dokumen ini menjelaskan preprocessing ringan di node ESP32-C6. Ini berbeda dari preprocessing AI/pre-model di Raspberry Pi.
 

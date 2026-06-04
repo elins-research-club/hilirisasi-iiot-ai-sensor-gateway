@@ -1,4 +1,4 @@
-﻿[Unit]
+[Unit]
 Description=IIoT AI Sensor Gateway pre-model pipeline
 After=network-online.target
 Wants=network-online.target

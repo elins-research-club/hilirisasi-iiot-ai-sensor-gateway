@@ -1,4 +1,4 @@
-﻿# Data Contract dan Payload
+# Data Contract dan Payload
 
 ## Tujuan
 

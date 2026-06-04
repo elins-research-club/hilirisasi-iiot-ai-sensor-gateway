@@ -1,6 +1,7 @@
-﻿#pragma once
+#pragma once
 
-#include <Arduino.h>
+#include <stddef.h>
+
 #include "sensor_types.h"
 
 namespace iiot {

@@ -1,4 +1,4 @@
-﻿#include "preprocessing.h"
+#include "preprocessing.h"
 
 #include <math.h>
 #include <string.h>

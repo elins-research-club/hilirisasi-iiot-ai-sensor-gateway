@@ -1,1 +1,1 @@
-﻿'''Dataset adapters.'''
+'''Dataset adapters.'''

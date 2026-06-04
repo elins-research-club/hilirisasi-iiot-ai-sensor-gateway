@@ -1,4 +1,4 @@
-﻿#include "lora_e32.h"
+#include "lora_e32.h"
 
 #include <string.h>
 #include "driver/gpio.h"

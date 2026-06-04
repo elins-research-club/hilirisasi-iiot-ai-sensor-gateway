@@ -1,4 +1,4 @@
-﻿# ESP32-C6 Sensor Node Firmware
+# ESP32-C6 Sensor Node Firmware
 
 Firmware skeleton ini adalah sisi ESP32-C6 untuk Industrial Environment Monitoring. Tugasnya hanya akuisisi sensor, preprocessing ringan, membuat payload compact, lalu mengirim payload melalui LoRa/Ebyte E32 ke Raspberry Pi gateway.
 
@@ -40,6 +40,8 @@ Raspberry Pi tetap melakukan preprocessing AI/pre-model:
 
 Skeleton default memakai mock sensor agar struktur firmware bisa diuji tanpa hardware sensor. PlatformIO project ini memakai framework ESP-IDF karena board ESP32-C6 DevKitC-1 pada PlatformIO package saat ini tidak mendukung Arduino framework.
 
+Catatan Windows/PlatformIO: ESP-IDF build melalui PlatformIO dapat gagal jika path project mengandung spasi. Jika folder workspace seperti `C:\vscode\IIOT Project\...` gagal dengan pesan whitespace path, build dari path tanpa spasi, misalnya salinan kerja `C:\vscode\iiot_pio_verify` atau clone repo ke folder tanpa spasi.
+
     cd firmware/esp32-c6-sensor-node
     pio run
     pio run -t upload
@@ -54,6 +56,8 @@ Di `platformio.ini`, ubah:
     -D IIOT_USE_MOCK_SENSORS=0
 
 Lalu lengkapi `src/sensors.cpp` dengan library BME688/BME668 pilihan dan kalibrasi SEN0377.
+
+Jika PlatformIO menampilkan warning flash size mismatch, samakan konfigurasi flash dengan board ESP32-C6 real melalui `sdkconfig.defaults`, `menuconfig`, atau board config PlatformIO sebelum upload produksi.
 
 ## Payload Compact
 

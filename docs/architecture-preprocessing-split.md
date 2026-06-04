@@ -1,4 +1,4 @@
-﻿# Pembagian Preprocessing ESP32-C6 dan Raspberry Pi
+# Pembagian Preprocessing ESP32-C6 dan Raspberry Pi
 
 ## Keputusan Arsitektur
 
