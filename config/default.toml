@@ -1,0 +1,33 @@
+[identity]
+gateway_id = 'raspi_gateway_01'
+default_room_id = 'room_A'
+
+[pipeline]
+buffer_max_size = 2048
+resample_interval_sec = 60
+window_size = 12
+window_step = 1
+min_valid_ratio = 0.75
+node_silent_after_sec = 180
+sequence_gap_warn = true
+
+[normalization]
+method = 'minmax'
+
+[normalization.minmax]
+temperature_c = [-10.0, 80.0]
+humidity_pct = [0.0, 100.0]
+pressure_hpa = [900.0, 1100.0]
+voc_raw = [0.0, 5000.0]
+bme_gas_raw = [0.0, 5000.0]
+co_raw = [0.0, 0.05]
+gas_raw = [0.0, 5000.0]
+
+[validation.ranges]
+temperature_c = [-10.0, 80.0]
+humidity_pct = [0.0, 100.0]
+pressure_hpa = [900.0, 1100.0]
+voc_raw = [0.0, 5000.0]
+bme_gas_raw = [0.0, 5000.0]
+co_raw = [0.0, 0.05]
+gas_raw = [0.0, 5000.0]

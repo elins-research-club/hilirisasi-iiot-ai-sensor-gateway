@@ -1,0 +1,16 @@
+﻿[Unit]
+Description=IIoT AI Sensor Gateway pre-model pipeline
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/iiot-ai-sensor-gateway
+EnvironmentFile=/home/pi/iiot-ai-sensor-gateway/.env
+ExecStart=/home/pi/iiot-ai-sensor-gateway/.venv/bin/python run_gateway.py run --input-file data/incoming/payloads.jsonl --output-dir data/processed
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,3 @@
+# Runtime is intentionally stdlib-first for Raspberry Pi reliability.
+# Install pytest only when running tests locally.
+pytest>=8.0

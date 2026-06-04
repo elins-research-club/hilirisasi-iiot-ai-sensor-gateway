@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Local config and runtime data
+.env
+data/raw/
+data/processed/
+data/logs/
+logs/
+*.log
+
+# Model/data artifacts generated locally
+*.pt
+*.onnx
+*.tflite
+*.joblib
+*.pkl
+*.npy
+*.npz
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+data/simulated/
+data/incoming/
+iot_telemetry_data.csv
+data/canonical/
+data/evaluation/
+firmware/**/.pio/
+firmware/**/.vscode/

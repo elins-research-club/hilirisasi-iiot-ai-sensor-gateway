@@ -1,0 +1,31 @@
+[build-system]
+requires = ['setuptools>=69', 'wheel']
+build-backend = 'setuptools.build_meta'
+
+[project]
+name = 'iiot-ai-sensor-gateway'
+version = '0.1.0'
+description = 'Pre-model AI sensor gateway pipeline for IIoT environmental monitoring.'
+readme = 'README.md'
+requires-python = '>=3.11'
+authors = [{ name = 'IIoT AI Developer' }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ['pytest>=8.0', 'ruff>=0.5']
+
+[project.scripts]
+iiot-ai-sensor-gateway = 'iiot_ai_sensor_gateway.cli:main'
+
+[tool.setuptools.packages.find]
+where = ['src']
+
+[tool.pytest.ini_options]
+pythonpath = ['src']
+testpaths = ['tests']
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ['E', 'F', 'I', 'UP', 'B']
