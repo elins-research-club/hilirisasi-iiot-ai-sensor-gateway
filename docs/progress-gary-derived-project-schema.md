@@ -8,6 +8,11 @@ Dokumen ini mencatat pembuatan dataset turunan dari Gary Stafford agar kolomnya 
 
 BME688/BME668 tidak diperlakukan sebagai sensor VOC mentah langsung di repo ini. Field mentah utama yang dipakai adalah temperature, humidity, pressure, dan BME gas raw/gas resistance style signal. Nilai VOC/IAQ sebaiknya menjadi output olahan tahap berikutnya, bukan kolom raw utama.
 
+Referensi:
+
+- Bosch Sensortec BME688 product page: https://www.bosch-sensortec.com/products/environmental-sensors/gas-sensors/bme688/
+- Bosch Sensortec BME688 datasheet: https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bme688-ds000.pdf
+
 ## Schema Dataset Turunan
 
 File CSV turunan:
