@@ -15,8 +15,9 @@
 ## Status Evaluasi
 
 - pipeline_status PASS berarti preprocessing berhasil, window terbentuk, dan NaN/Inf tidak ditemukan.
-- dataset_coverage_status PARTIAL pada Gary berarti pressure_hpa tidak tersedia dan gas BME688 asli hanya diwakili proxy LPG/smoke.
-- lstm_readiness READY_WITH_LIMITATIONS berarti window siap untuk uji LSTM awal, tetapi dataset belum cukup mewakili sensor final.
+- dataset_coverage_status FULL pada workflow `derive-gary-schema` berarti field target tersedia di dataset turunan project-like.
+- lstm_readiness READY pada workflow derived schema berarti window siap untuk uji bentuk input LSTM. Ini belum berarti dataset sudah setara data sensor real.
+- dataset_coverage_status PARTIAL pada workflow Gary lama berarti pressure_hpa tidak tersedia dan gas BME688 asli hanya diwakili proxy LPG/smoke.
 
 ## Masalah Umum
 

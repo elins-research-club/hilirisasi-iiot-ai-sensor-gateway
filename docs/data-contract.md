@@ -46,15 +46,16 @@ Raspberry Pi menyamakan payload menjadi field canonical:
 - sensor.temperature_c.
 - sensor.humidity_pct.
 - sensor.pressure_hpa.
-- sensor.voc_raw.
 - sensor.bme_gas_raw.
 - sensor.co_raw.
 - sensor.gas_raw.
 
 ## Mapping Sensor Target
 
-- BME688/BME668: temperature_c, humidity_pct, pressure_hpa, bme_gas_raw atau voc_raw.
+- BME688/BME668: temperature_c, humidity_pct, pressure_hpa, bme_gas_raw/gas resistance style signal.
 - SEN0377: co_raw.
+
+Catatan: VOC/IAQ bukan field mentah utama. Jika nanti memakai BSEC atau model tambahan, VOC/IAQ sebaiknya menjadi output olahan seperti `iaq_score` atau `gas_risk_score`, bukan pengganti `bme_gas_raw`.
 
 ## Mapping Gary Stafford
 
@@ -63,10 +64,30 @@ Gary dipakai sebagai uji awal pipeline, bukan representasi final 1:1.
 - temp menjadi temperature_c.
 - humidity menjadi humidity_pct.
 - co menjadi co_raw atau SEN0377-like CO feature.
-- lpg dan smoke menjadi gas proxy awal untuk bme_gas_raw/gas_raw atau pendekatan VOC proxy.
+- lpg dan smoke menjadi gas proxy awal untuk bme_gas_raw.
 - pressure_hpa unavailable karena Gary tidak punya pressure.
-- voc_raw unavailable sebagai VOC/BME688 gas asli; Gary hanya punya gas-like proxy.
 - light dan motion menjadi metadata/ignored columns dan tidak masuk fitur utama default.
+
+## Dataset Turunan Gary Project Schema
+
+Workflow terbaru membuat dataset baru yang kolomnya disesuaikan dengan sensor project, tanpa mengubah CSV Gary asli:
+
+```powershell
+py -3.13 run_gateway.py derive-gary-schema --input-csv iot_telemetry_data.csv --output-csv data/derived/gary_project_sensor_schema.csv --output-jsonl data/derived/gary_project_sensor_schema.jsonl --output-payloads data/derived/gary_project_sensor_payloads.jsonl
+```
+
+CSV turunan:
+
+```text
+timestamp,node_id,sequence,temperature_c,humidity_pct,pressure_hpa,bme_gas_raw,co_raw
+```
+
+Aturan derivasi:
+
+- `pressure_hpa` dibuat sebagai tren barometrik halus realistis sekitar 1008-1014 hPa.
+- `bme_gas_raw` dibuat dari kombinasi LPG/smoke Gary, lalu diskalakan ke rentang 500-4500 agar cocok dengan normalisasi pipeline.
+- `light` dan `motion` dibuang dari schema utama.
+- Data turunan ini untuk belajar, simulasi pipeline, dan validasi bentuk data. Data real sensor tetap menjadi sumber kebenaran final.
 
 ## Simulasi Gary ke Payload ESP32-C6
 
@@ -99,7 +120,7 @@ Evaluator memisahkan tiga status:
 - dataset_coverage_status: FULL/PARTIAL untuk cakupan dataset terhadap sensor target.
 - lstm_readiness: READY/READY_WITH_LIMITATIONS/NOT_READY untuk kesiapan window sebagai input LSTM.
 
-Untuk Gary saat ini: pipeline_status PASS, dataset_coverage_status PARTIAL, dan lstm_readiness READY_WITH_LIMITATIONS.
+Untuk workflow `derive-gary-schema`: pipeline_status PASS, dataset_coverage_status FULL, dan lstm_readiness READY. Untuk workflow Gary lama tanpa pressure turunan, status coverage tetap PARTIAL.
 
 ## Output Window LSTM-Ready
 

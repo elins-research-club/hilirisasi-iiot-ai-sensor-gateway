@@ -10,10 +10,10 @@ Catatan terbaru: untuk simulasi yang lebih dekat ke hardware, gunakan laporan `d
 
 Schema lingkungan ideal project memakai:
 
-- BME688/BME668 untuk temperature, humidity, pressure, dan gas/VOC.
+- BME688/BME668 untuk temperature, humidity, pressure, dan BME gas raw/gas resistance style signal.
 - SEN0377 untuk CO/gas tambahan.
 
-Gary dipakai sebagai uji awal karena memiliki temperature, humidity, CO, LPG, dan smoke. Gary tidak merepresentasikan sensor final 1:1 karena tidak punya pressure_hpa dan tidak punya VOC/BME688 gas asli. Namun, LPG dan smoke adalah gas-like feature yang bisa dipakai sebagai proxy awal untuk menguji pipeline gas/VOC.
+Gary dipakai sebagai uji awal karena memiliki temperature, humidity, CO, LPG, dan smoke. Gary tidak merepresentasikan sensor final 1:1 karena tidak punya pressure_hpa dan tidak punya BME gas raw asli. Namun, LPG dan smoke adalah gas-like feature yang bisa dipakai sebagai proxy awal untuk menguji pipeline gas.
 
 ## Mapping Dataset
 
@@ -22,9 +22,9 @@ Gary dipakai sebagai uji awal karena memiliki temperature, humidity, CO, LPG, da
 - temp menjadi temperature_c.
 - humidity menjadi humidity_pct.
 - co menjadi co_raw atau SEN0377-like CO feature.
-- lpg dan smoke menjadi gas proxy untuk bme_gas_raw/gas_raw atau pendekatan voc_proxy.
+- lpg dan smoke menjadi gas proxy untuk bme_gas_raw/gas_raw.
 - pressure_hpa unavailable karena Gary tidak punya pressure.
-- voc_raw unavailable sebagai VOC/BME688 gas asli.
+- BME gas raw asli dari sensor Bosch tidak tersedia; LPG/smoke hanya proxy.
 - light dan motion diabaikan dari fitur utama default.
 
 ## Alur Preprocessing
@@ -63,7 +63,6 @@ Gary CSV -> ESP32-C6-like preprocessing -> compact LoRa payload -> Raspberry Pi 
 - Missing rate bme_gas_raw: 0.0.
 - Missing rate gas_raw: 0.0.
 - Missing rate pressure_hpa: 1.0.
-- Missing rate voc_raw: 1.0.
 - Kolom dipakai: temp, humidity, co, lpg, smoke.
 - Kolom proxy: lpg, smoke.
 - Kolom diabaikan: light, motion.
@@ -74,13 +73,13 @@ Gary CSV -> ESP32-C6-like preprocessing -> compact LoRa payload -> Raspberry Pi 
 
 ## Interpretasi
 
-Pipeline pre-model berhasil memproses dataset Gary menjadi window LSTM-ready tanpa NaN/Inf dan tanpa invalid row. Karena preprocessing berhasil dan window terbentuk, pipeline_status adalah PASS. Coverage dataset tetap PARTIAL karena pressure_hpa tidak tersedia dan gas BME688/VOC asli hanya diwakili oleh proxy LPG/smoke. Dengan kondisi tersebut, data siap untuk uji awal LSTM sebagai READY_WITH_LIMITATIONS.
+Pipeline pre-model berhasil memproses dataset Gary menjadi window LSTM-ready tanpa NaN/Inf dan tanpa invalid row. Karena preprocessing berhasil dan window terbentuk, pipeline_status adalah PASS. Coverage dataset tetap PARTIAL karena pressure_hpa tidak tersedia dan BME gas raw asli hanya diwakili oleh proxy LPG/smoke. Dengan kondisi tersebut, data siap untuk uji awal LSTM sebagai READY_WITH_LIMITATIONS.
 
 ## Keterbatasan Gary
 
 - Tidak ada pressure_hpa.
-- Tidak ada VOC/BME688 gas asli.
-- LPG dan smoke hanya gas proxy awal, bukan pengganti penuh BME688 gas/VOC.
+- Tidak ada BME gas raw asli dari sensor Bosch.
+- LPG dan smoke hanya gas proxy awal, bukan pengganti penuh BME gas raw dari sensor real.
 - CO tersedia dan dipakai sebagai SEN0377-like feature, tetapi skala dan karakteristiknya tetap perlu divalidasi terhadap sensor real.
 - Dataset publik ini hanya uji awal pipeline, bukan representasi final sensor project.
 

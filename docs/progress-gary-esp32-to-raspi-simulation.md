@@ -27,9 +27,9 @@ Mapping yang dipakai:
 - `temp` menjadi `temperature_c`.
 - `humidity` menjadi `humidity_pct`.
 - `co` menjadi `co_raw` atau fitur SEN0377-like.
-- `lpg` dan `smoke` menjadi gas proxy untuk `bme_gas_raw` atau pendekatan VOC proxy.
+- `lpg` dan `smoke` menjadi gas proxy untuk `bme_gas_raw`.
 - `pressure_hpa` unavailable karena Gary tidak punya pressure.
-- `voc_raw` unavailable sebagai VOC/BME688 gas asli.
+- Gary asli tidak memiliki BME gas raw dari sensor Bosch; LPG/smoke hanya dipakai sebagai gas-like proxy.
 - `light` dan `motion` disimpan sebagai ignored columns dan tidak masuk fitur utama default.
 
 Gary tidak dianggap sebagai representasi final sensor 1:1. Gary hanya uji awal pipeline karena punya temperature, humidity, CO, LPG, dan smoke.
@@ -89,7 +89,6 @@ py -3.13 run_gateway.py evaluate --canonical data/simulated/gary_esp32_lora_payl
 - Missing rate `bme_gas_raw`: 0.0.
 - Missing rate `gas_raw`: 1.0.
 - Missing rate `pressure_hpa`: 1.0.
-- Missing rate `voc_raw`: 1.0.
 - Kolom dipakai: `temp`, `humidity`, `co`, `lpg`, `smoke`.
 - Kolom proxy: `lpg`, `smoke`.
 - Kolom diabaikan: `light`, `motion`.
@@ -102,15 +101,15 @@ py -3.13 run_gateway.py evaluate --canonical data/simulated/gary_esp32_lora_payl
 
 Pipeline berhasil karena payload compact dari simulator ESP32-like dapat diparse, divalidasi, diresampling, diekstrak fiturnya, dinormalisasi, dan di-window tanpa NaN/Inf. Status teknis pipeline adalah PASS.
 
-Coverage dataset tetap PARTIAL karena Gary tidak punya pressure dan tidak punya VOC/BME688 gas asli. LPG/smoke hanya dipakai sebagai gas proxy awal melalui `bme_gas_raw`. Pada payload compact ini `gas_raw` memang kosong karena sinyal gas utama sudah dibawa lewat alias `s.bme`.
+Coverage dataset tetap PARTIAL karena workflow legacy ini tidak mengisi pressure dari dataset turunan. LPG/smoke hanya dipakai sebagai gas proxy awal melalui `bme_gas_raw`. Pada payload compact ini `gas_raw` memang kosong karena sinyal gas utama sudah dibawa lewat alias `s.bme`.
 
 Dengan hasil ini, output sudah siap untuk uji awal model time-series sebagai `READY_WITH_LIMITATIONS`, bukan sebagai dataset final produksi.
 
 ## Keterbatasan Gary
 
 - Tidak ada `pressure_hpa`.
-- Tidak ada VOC/BME688 gas asli.
-- LPG/smoke adalah gas-like proxy, bukan pengganti penuh BME688 gas/VOC.
+- Tidak ada BME gas raw asli dari sensor Bosch.
+- LPG/smoke adalah gas-like proxy, bukan pengganti penuh BME gas raw dari sensor real.
 - CO tersedia sebagai SEN0377-like, tetapi skala sensor real tetap harus dikalibrasi.
 - Dataset publik Gary tidak merepresentasikan wiring, noise, latency, RSSI, packet loss LoRa, atau kondisi sensor real.
 

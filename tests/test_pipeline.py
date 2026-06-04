@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
 from iiot_ai_sensor_gateway.adapters.gary_stafford import convert_gary_stafford_csv
+from iiot_ai_sensor_gateway.adapters.gary_project_schema import derive_gary_project_schema
 from iiot_ai_sensor_gateway.config import load_config
 from iiot_ai_sensor_gateway.contracts import FeatureVector
 from iiot_ai_sensor_gateway.evaluation import evaluate_preprocessing
@@ -139,6 +140,48 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(result.nan_count, 0)
             self.assertEqual(result.inf_count, 0)
             self.assertEqual(result.input_source, 'gary_esp32_simulated_lora_payload')
+
+    def test_gary_project_schema_derivation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            csv_path = temp / 'gary.csv'
+            with csv_path.open('w', newline='', encoding='utf-8') as file:
+                writer = csv.DictWriter(file, fieldnames=['ts', 'device', 'co', 'humidity', 'light', 'lpg', 'motion', 'smoke', 'temp'])
+                writer.writeheader()
+                for idx in range(15):
+                    writer.writerow({'ts': 1594512094 + idx * 60, 'device': 'dev1', 'co': 0.004 + idx * 0.0001, 'humidity': 60 + idx * 0.1, 'light': 'false', 'lpg': 0.006 + idx * 0.0001, 'motion': 'false', 'smoke': 0.018 + idx * 0.0002, 'temp': 25 + idx * 0.1})
+            derived_csv = temp / 'derived.csv'
+            derived_jsonl = temp / 'derived.jsonl'
+            derived_payloads = temp / 'payloads.jsonl'
+            stats = derive_gary_project_schema(csv_path, derived_csv, derived_jsonl, derived_payloads)
+            self.assertEqual(stats.written_rows, 15)
+            header = derived_csv.read_text(encoding='utf-8').splitlines()[0]
+            self.assertEqual(header, 'timestamp,node_id,sequence,temperature_c,humidity_pct,pressure_hpa,bme_gas_raw,co_raw')
+            with derived_csv.open(newline='', encoding='utf-8') as file:
+                first_csv = next(csv.DictReader(file))
+            self.assertIn('pressure_hpa', first_csv)
+            self.assertGreater(float(first_csv['pressure_hpa']), 1000.0)
+            self.assertGreater(float(first_csv['bme_gas_raw']), 0.0)
+
+            config = load_config(ROOT / 'config/default.toml')
+            pipeline = PreModelPipeline(config)
+            windows = []
+            for line in derived_payloads.read_text(encoding='utf-8').splitlines():
+                windows.extend(pipeline.process_payload(line))
+            windows_path = temp / 'windows.jsonl'
+            windows_path.write_text(''.join(json.dumps(w.as_record()) + '\n' for w in windows), encoding='utf-8')
+            result = evaluate_preprocessing(
+                derived_payloads,
+                windows_path,
+                config,
+                input_source='gary_derived_project_schema_payload',
+                simulation_layer='project_schema_derivation',
+                gateway_layer='raspberry_pi_pre_model_pipeline',
+            )
+            self.assertEqual(result.pipeline_status, 'PASS')
+            self.assertEqual(result.dataset_coverage_status, 'FULL')
+            self.assertEqual(result.lstm_readiness, 'READY')
+            self.assertEqual(result.shape, (4, config.pipeline.window_size, len(FEATURE_NAMES)))
 
 if __name__ == '__main__':
     unittest.main()

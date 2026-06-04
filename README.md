@@ -51,7 +51,7 @@ Non-scope repo ini:
 
 ## Sensor Target Project
 
-- BME688/BME668: temperature, humidity, pressure, gas/VOC-like raw value.
+- BME688/BME668: temperature, humidity, pressure, dan BME gas raw/gas resistance style signal.
 - SEN0377: CO/gas tambahan.
 
 ## Folder Utama
@@ -76,28 +76,33 @@ pio device monitor
 
 Default firmware memakai `IIOT_USE_MOCK_SENSORS=1` di `platformio.ini`, sehingga modul bisa dibaca/dibuild tanpa wiring sensor real. Untuk hardware real, ubah ke `0`, lengkapi BME688/BME668 library di `src/sensors.cpp`, dan kalibrasi SEN0377.
 
-## Gary Stafford End-to-End Simulation Workflow
+## Gary Stafford Project Schema Workflow
 
-Dataset Gary dipakai sebagai uji awal pipeline karena punya temperature, humidity, CO, LPG, dan smoke. `co` dipakai sebagai SEN0377-like feature; `lpg/smoke` dipakai sebagai gas proxy awal untuk pendekatan BME688 gas/VOC. Gary tetap parsial karena tidak punya pressure dan tidak punya VOC/BME688 gas asli.
+Dataset Gary dipakai sebagai uji awal pipeline karena punya temperature, humidity, CO, LPG, dan smoke. `co` dipakai sebagai SEN0377-like feature; `lpg/smoke` dipakai sebagai dasar `bme_gas_raw` turunan. Gary asli tidak punya pressure, jadi repo membuat dataset turunan project-like agar kolomnya sama dengan target sensor.
 
-Jalur simulasi yang direkomendasikan sekarang meniru alur hardware awal:
+Jalur yang paling mudah dipahami sekarang:
 
 ```text
 iot_telemetry_data.csv
--> simulasi sensor read Gary
--> ESP32-C6-like light preprocessing
--> compact LoRa payload JSONL
+-> derive project sensor schema dataset
+-> compact payload JSONL project-like
 -> Raspberry Pi Python pre-model pipeline
 -> window LSTM-ready
 ```
 
 ```powershell
-py -3.13 run_gateway.py simulate-gary-esp32 --input-csv iot_telemetry_data.csv --output data/simulated/gary_esp32_lora_payloads.jsonl
-py -3.13 run_gateway.py run --input-file data/simulated/gary_esp32_lora_payloads.jsonl --output-dir data/processed
-py -3.13 run_gateway.py evaluate --canonical data/simulated/gary_esp32_lora_payloads.jsonl --windows data/processed/lstm_windows.jsonl --output data/evaluation/gary_esp32_to_raspi_eval.json --input-source gary_esp32_simulated_lora_payload --simulation-layer esp32_light_preprocessing --gateway-layer raspberry_pi_pre_model_pipeline
+py -3.13 run_gateway.py derive-gary-schema --input-csv iot_telemetry_data.csv --output-csv data/derived/gary_project_sensor_schema.csv --output-jsonl data/derived/gary_project_sensor_schema.jsonl --output-payloads data/derived/gary_project_sensor_payloads.jsonl
+py -3.13 run_gateway.py run --input-file data/derived/gary_project_sensor_payloads.jsonl --output-dir data/processed
+py -3.13 run_gateway.py evaluate --canonical data/derived/gary_project_sensor_payloads.jsonl --windows data/processed/lstm_windows.jsonl --output data/evaluation/gary_project_schema_eval.json --input-source gary_derived_project_schema_payload --simulation-layer project_schema_derivation --gateway-layer raspberry_pi_pre_model_pipeline
 ```
 
-Jalur direct canonical masih tersedia untuk debugging parser/pipeline tanpa simulasi firmware:
+Dataset turunan CSV berisi kolom:
+
+```text
+timestamp,node_id,sequence,temperature_c,humidity_pct,pressure_hpa,bme_gas_raw,co_raw
+```
+
+Jalur lama tetap tersedia untuk debugging parser/pipeline tanpa dataset turunan:
 
 ```powershell
 py -3.13 run_gateway.py convert-gary --input-csv iot_telemetry_data.csv --output data/canonical/gary_stafford_canonical.jsonl
@@ -105,16 +110,17 @@ py -3.13 run_gateway.py run --input-file data/canonical/gary_stafford_canonical.
 py -3.13 run_gateway.py evaluate --canonical data/canonical/gary_stafford_canonical.jsonl --windows data/processed/lstm_windows.jsonl --output data/evaluation/gary_preprocessing_eval.json
 ```
 
-Hasil terakhir jalur Gary -> ESP32-like -> Raspberry Pi:
+Hasil terakhir jalur Gary derived project schema -> Raspberry Pi:
 
 - `pipeline_status`: PASS.
-- `dataset_coverage_status`: PARTIAL.
-- `lstm_readiness`: READY_WITH_LIMITATIONS.
+- `dataset_coverage_status`: FULL.
+- `lstm_readiness`: READY.
 - Shape: `[34536, 12, 16]`.
 - NaN/Inf: `0/0`.
-- Output payload compact: `data/simulated/gary_esp32_lora_payloads.jsonl`.
+- Output CSV dataset: `data/derived/gary_project_sensor_schema.csv`.
+- Output payload compact: `data/derived/gary_project_sensor_payloads.jsonl`.
 - Output window: `data/processed/lstm_windows.jsonl`.
-- Output evaluasi: `data/evaluation/gary_esp32_to_raspi_eval.json`.
+- Output evaluasi: `data/evaluation/gary_project_schema_eval.json`.
 
 ## Verifikasi Python
 
@@ -130,5 +136,6 @@ py -3.13 -m unittest discover -s tests -p 'test_*.py' -q
 - `docs/esp32-preprocessing.md`
 - `docs/raspberry-pi-pipeline.md`
 - `docs/data-contract.md`
+- `docs/progress-gary-derived-project-schema.md`
 - `docs/progress-gary-stafford-preprocessing.md`
 - `firmware/esp32-c6-sensor-node/README.md`

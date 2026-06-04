@@ -6,6 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .adapters.gary_stafford import convert_gary_stafford_csv
+from .adapters.gary_project_schema import derive_gary_project_schema
 from .config import load_config, load_dotenv
 from .evaluation import evaluate_preprocessing, write_evaluation_report
 from .esp32_sim import simulate_gary_esp32_payloads
@@ -34,6 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
     gary = sub.add_parser('convert-gary', help='convert Gary Stafford CSV to canonical JSONL')
     gary.add_argument('--input-csv', default='iot_telemetry_data.csv')
     gary.add_argument('--output', default='data/canonical/gary_stafford_canonical.jsonl')
+    derived = sub.add_parser('derive-gary-schema', help='derive project sensor schema dataset from Gary Stafford CSV')
+    derived.add_argument('--input-csv', default='iot_telemetry_data.csv')
+    derived.add_argument('--output-csv', default='data/derived/gary_project_sensor_schema.csv')
+    derived.add_argument('--output-jsonl', default='data/derived/gary_project_sensor_schema.jsonl')
+    derived.add_argument('--output-payloads', default='data/derived/gary_project_sensor_payloads.jsonl')
+    derived.add_argument('--gateway-id', default='gary_project_schema')
+    derived.add_argument('--room-id', default='gary_public')
     gary_esp32 = sub.add_parser('simulate-gary-esp32', help='simulate ESP32-C6 preprocessing from Gary CSV into compact LoRa JSONL')
     gary_esp32.add_argument('--input-csv', default='iot_telemetry_data.csv')
     gary_esp32.add_argument('--output', default='data/simulated/gary_esp32_lora_payloads.jsonl')
@@ -92,6 +100,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == 'convert-gary':
         stats = convert_gary_stafford_csv(args.input_csv, args.output)
+        print(json.dumps(stats.as_dict(), indent=2))
+        return 0
+    if args.cmd == 'derive-gary-schema':
+        stats = derive_gary_project_schema(
+            args.input_csv,
+            args.output_csv,
+            args.output_jsonl,
+            args.output_payloads,
+            args.gateway_id,
+            args.room_id,
+        )
         print(json.dumps(stats.as_dict(), indent=2))
         return 0
     if args.cmd == 'simulate-gary-esp32':

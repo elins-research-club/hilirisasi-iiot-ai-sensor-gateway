@@ -37,6 +37,7 @@ Thumbs.db
 .idea/
 data/simulated/
 data/incoming/
+data/derived/
 iot_telemetry_data.csv
 data/canonical/
 data/evaluation/

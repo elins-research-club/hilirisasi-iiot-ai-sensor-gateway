@@ -17,7 +17,7 @@ ESP32-C6 tidak menjalankan LSTM, anomaly detection, forecasting, MQTT broker, ba
 
 ## Sensor Target
 
-- BME688/BME668: temperature, humidity, pressure, gas/VOC-like raw value.
+- BME688/BME668: temperature, humidity, pressure, dan BME gas raw/gas resistance style signal.
 - SEN0377: CO/gas tambahan.
 
 ## Aturan Preprocessing Ringan
@@ -68,7 +68,7 @@ Untuk menguji jalur dari awal tanpa hardware, repo menyediakan simulator Python 
 - melakukan range check dan missing check;
 - menerapkan moving average 3 sampel per device;
 - membuat sequence number per device;
-- mengirim compact payload dengan flag `pressure_unavailable`, `voc_not_native`, dan `gas_proxy_from_lpg_smoke`.
+- mengirim compact payload. Pada simulator Gary lama, flag dapat berisi `pressure_unavailable` dan `gas_proxy_from_lpg_smoke` karena dataset asli tidak punya pressure.
 
 Command:
 
@@ -77,3 +77,5 @@ py -3.13 run_gateway.py simulate-gary-esp32 --input-csv iot_telemetry_data.csv -
 ```
 
 Simulator ini hanya untuk laptop/testing. Implementasi hardware tetap berada di firmware C++ folder `firmware/esp32-c6-sensor-node/`.
+
+Untuk belajar dengan kolom yang sudah disesuaikan dengan sensor project, gunakan workflow `derive-gary-schema` di README. Workflow itu membuat `pressure_hpa` synthetic realistis dan `bme_gas_raw` turunan dari LPG/smoke sebelum payload masuk ke pipeline Raspberry Pi.

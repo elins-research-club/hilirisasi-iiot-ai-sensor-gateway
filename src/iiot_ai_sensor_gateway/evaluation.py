@@ -10,7 +10,7 @@ from .config import AppConfig
 from .parser import PayloadParser
 from .validation import ReadingValidator
 
-TARGET_FIELDS = ('temperature_c', 'humidity_pct', 'co_raw', 'bme_gas_raw', 'gas_raw', 'pressure_hpa', 'voc_raw')
+TARGET_FIELDS = ('temperature_c', 'humidity_pct', 'pressure_hpa', 'bme_gas_raw', 'co_raw')
 USED_COLUMNS = ('temp', 'humidity', 'co', 'lpg', 'smoke')
 IGNORED_COLUMNS = ('light', 'motion')
 PROXY_COLUMNS = ('lpg', 'smoke')
@@ -104,16 +104,17 @@ def evaluate_preprocessing(
     warnings: list[str] = []
     if rates['pressure_hpa'] >= 1.0:
         warnings.append('pressure_hpa_unavailable_in_gary')
-    if rates['voc_raw'] >= 1.0:
-        warnings.append('voc_raw_not_native_in_gary')
-    if rates['bme_gas_raw'] < 1.0 or rates['gas_raw'] < 1.0:
+    if 'gary' in input_source and rates['bme_gas_raw'] < 1.0:
         warnings.append('bme_gas_raw_uses_lpg_smoke_proxy')
+    if 'derived_project_schema' in input_source or 'project_schema' in input_source:
+        warnings.append('pressure_hpa_synthetic_in_derived_dataset')
+        warnings.append('bme_gas_raw_scaled_from_lpg_smoke')
     if window_count == 0 or nan_count or inf_count or invalid > total * 0.05:
         pipeline_status = 'FAIL'
     else:
         pipeline_status = 'PASS'
     dataset_coverage_status = 'FULL'
-    if rates['pressure_hpa'] >= 1.0 or 'bme_gas_raw_uses_lpg_smoke_proxy' in warnings:
+    if rates['pressure_hpa'] >= 1.0:
         dataset_coverage_status = 'PARTIAL'
     if pipeline_status == 'FAIL':
         lstm_readiness = 'NOT_READY'
