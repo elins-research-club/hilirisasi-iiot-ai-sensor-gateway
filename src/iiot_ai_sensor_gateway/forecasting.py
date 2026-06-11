@@ -6,7 +6,7 @@ import json
 import math
 import random
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,7 @@ from .features import FEATURE_NAMES
 from .normalization import DEFAULT_RANGES
 
 TARGET_NAMES = ("temperature_c", "humidity_pct", "pressure_hpa", "bme_gas_raw", "co_raw")
+MODEL_VERSION = "lstm_forecast_v1"
 
 
 def _require_numpy():
@@ -36,6 +37,9 @@ class ForecastDatasetStats:
     output_npz: str
     output_meta: str
     horizon_steps: int
+    resample_interval_sec: int
+    window_size: int
+    purge_gap_steps: int
     feature_names: tuple[str, ...]
     target_names: tuple[str, ...]
     target_indices: tuple[int, ...]
@@ -48,6 +52,9 @@ class ForecastDatasetStats:
     nodes: tuple[str, ...]
     start_timestamp: str | None
     end_timestamp: str | None
+    split_time_range: dict[str, Any]
+    normalization_ranges: dict[str, tuple[float, float]]
+    created_at: str
 
     def as_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -60,11 +67,18 @@ class ForecastDatasetStats:
             "nodes",
         ):
             data[key] = list(data[key])
+        data["normalization_ranges"] = {
+            key: list(value) for key, value in self.normalization_ranges.items()
+        }
         return data
 
 
 def _parse_dt(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat()
 
 
 def _read_window_records(windows_jsonl: str | Path) -> list[dict[str, Any]]:
@@ -82,6 +96,25 @@ def _read_window_records(windows_jsonl: str | Path) -> list[dict[str, Any]]:
     return records
 
 
+def _merged_ranges(ranges: dict[str, tuple[float, float]] | None = None) -> dict[str, tuple[float, float]]:
+    return {**DEFAULT_RANGES, **(ranges or {})}
+
+
+def _json_ranges(ranges: dict[str, tuple[float, float]]) -> str:
+    return json.dumps({key: list(value) for key, value in ranges.items()}, sort_keys=True)
+
+
+def _loads_json_array_value(value: Any, default: Any) -> Any:
+    try:
+        if hasattr(value, "item"):
+            value = value.item()
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        return json.loads(str(value))
+    except Exception:
+        return default
+
+
 def _split_counts(total: int, train_ratio: float, val_ratio: float) -> tuple[int, int, int]:
     if total < 3:
         raise ValueError("at least 3 samples per node are required")
@@ -93,6 +126,162 @@ def _split_counts(total: int, train_ratio: float, val_ratio: float) -> tuple[int
     return train, val, total - train - val
 
 
+def _ensure_feature_names(records: list[dict[str, Any]]) -> tuple[str, ...]:
+    feature_names = tuple(records[0]["feature_names"])
+    if feature_names != FEATURE_NAMES:
+        raise ValueError("window feature_names do not match pipeline FEATURE_NAMES")
+    for record in records:
+        if tuple(record["feature_names"]) != feature_names:
+            raise ValueError("mixed feature_names in window dataset")
+    return feature_names
+
+
+def _rebuild_windows(records: list[dict[str, Any]], window_size: int) -> list[dict[str, Any]]:
+    if window_size < 1:
+        raise ValueError("window_size must be >= 1")
+    feature_names = _ensure_feature_names(records)
+    if int(records[0]["shape"][0]) == window_size:
+        return records
+
+    by_node: dict[str, dict[str, dict[str, Any]]] = {}
+    for record in records:
+        by_node.setdefault(record["node_id"], {})[record["end_timestamp"]] = record
+
+    rebuilt: list[dict[str, Any]] = []
+    for node_id in sorted(by_node):
+        node_records = sorted(by_node[node_id].values(), key=lambda item: _parse_dt(item["end_timestamp"]))
+        points = [
+            {
+                "gateway_id": record["gateway_id"],
+                "node_id": node_id,
+                "room_id": record["room_id"],
+                "timestamp": record["end_timestamp"],
+                "x": record["x"][-1],
+            }
+            for record in node_records
+        ]
+        if len(points) < window_size:
+            continue
+        for index in range(window_size - 1, len(points)):
+            items = points[index - window_size + 1 : index + 1]
+            rebuilt.append(
+                {
+                    "gateway_id": items[-1]["gateway_id"],
+                    "node_id": node_id,
+                    "room_id": items[-1]["room_id"],
+                    "start_timestamp": items[0]["timestamp"],
+                    "end_timestamp": items[-1]["timestamp"],
+                    "feature_names": list(feature_names),
+                    "shape": [window_size, len(feature_names)],
+                    "x": [item["x"] for item in items],
+                }
+            )
+    if not rebuilt:
+        raise ValueError(f"not enough timeline points to rebuild window_size={window_size}")
+    return rebuilt
+
+
+def _make_samples(
+    node_records: list[dict[str, Any]],
+    horizon_steps: int,
+    target_indices: tuple[int, ...],
+) -> list[dict[str, Any]]:
+    samples: list[dict[str, Any]] = []
+    sample_count = len(node_records) - horizon_steps
+    for index in range(max(0, sample_count)):
+        current = node_records[index]
+        future = node_records[index + horizon_steps]
+        samples.append(
+            {
+                "x": current["x"],
+                "y": [future["x"][-1][target_index] for target_index in target_indices],
+                "input_start_timestamp": current["start_timestamp"],
+                "input_end_timestamp": current["end_timestamp"],
+                "label_timestamp": future["end_timestamp"],
+                "node_id": current["node_id"],
+            }
+        )
+    return samples
+
+
+def _filter_non_overlapping(
+    samples: list[dict[str, Any]],
+    previous_label_end: datetime | None,
+) -> list[dict[str, Any]]:
+    if previous_label_end is None:
+        return samples
+    return [sample for sample in samples if _parse_dt(sample["input_start_timestamp"]) > previous_label_end]
+
+
+def _assign_temporal_splits(
+    samples: list[dict[str, Any]],
+    train_ratio: float,
+    val_ratio: float,
+    purge_gap_steps: int,
+) -> dict[str, list[dict[str, Any]]]:
+    total = len(samples)
+    if total < 3:
+        return {"train": [], "val": [], "test": []}
+    train_count, val_count, _test_count = _split_counts(total, train_ratio, val_ratio)
+    val_start = min(total, train_count + purge_gap_steps)
+    val_end = min(total, val_start + val_count)
+    test_start = min(total, val_end + purge_gap_steps)
+
+    train = samples[:train_count]
+    train_label_end = max((_parse_dt(item["label_timestamp"]) for item in train), default=None)
+    val = _filter_non_overlapping(samples[val_start:val_end], train_label_end)
+    val_label_end = max((_parse_dt(item["label_timestamp"]) for item in val), default=train_label_end)
+    test = _filter_non_overlapping(samples[test_start:], val_label_end)
+    return {"train": train, "val": val, "test": test}
+
+
+def _update_split_range(target: dict[str, Any], split: str, sample: dict[str, Any]) -> None:
+    item = target.setdefault(
+        split,
+        {
+            "input_start": None,
+            "input_end": None,
+            "label_start": None,
+            "label_end": None,
+            "nodes": {},
+        },
+    )
+    node_item = item["nodes"].setdefault(
+        sample["node_id"],
+        {"input_start": None, "input_end": None, "label_start": None, "label_end": None},
+    )
+    for bucket in (item, node_item):
+        bucket["input_start"] = min(
+            [value for value in (bucket["input_start"], sample["input_start_timestamp"]) if value]
+        )
+        bucket["input_end"] = max(
+            [value for value in (bucket["input_end"], sample["input_end_timestamp"]) if value]
+        )
+        bucket["label_start"] = min(
+            [value for value in (bucket["label_start"], sample["label_timestamp"]) if value]
+        )
+        bucket["label_end"] = max(
+            [value for value in (bucket["label_end"], sample["label_timestamp"]) if value]
+        )
+
+
+def _assert_split_ranges_do_not_overlap(split_time_range: dict[str, Any]) -> None:
+    for node_id in {
+        node
+        for split in split_time_range.values()
+        for node in split.get("nodes", {})
+    }:
+        previous_label_end: datetime | None = None
+        for split in ("train", "val", "test"):
+            node_range = split_time_range.get(split, {}).get("nodes", {}).get(node_id)
+            if not node_range:
+                continue
+            input_start = _parse_dt(node_range["input_start"])
+            if previous_label_end is not None and input_start <= previous_label_end:
+                raise ValueError(f"temporal split overlap detected for {node_id} before {split}")
+            previous_label_end = _parse_dt(node_range["label_end"])
+
+
 def prepare_forecast_dataset(
     windows_jsonl: str | Path,
     output_npz: str | Path = "data/modeling/lstm_forecast_dataset.npz",
@@ -101,20 +290,25 @@ def prepare_forecast_dataset(
     train_ratio: float = 0.70,
     val_ratio: float = 0.15,
     target_names: tuple[str, ...] = TARGET_NAMES,
+    resample_interval_sec: int = 60,
+    window_size: int | None = None,
+    purge_gap_steps: int | None = None,
+    normalization_ranges: dict[str, tuple[float, float]] | None = None,
 ) -> ForecastDatasetStats:
     if horizon_steps < 1:
         raise ValueError("horizon_steps must be >= 1")
     np = _require_numpy()
     records = _read_window_records(windows_jsonl)
-    feature_names = tuple(records[0]["feature_names"])
-    if feature_names != FEATURE_NAMES:
-        raise ValueError("window feature_names do not match pipeline FEATURE_NAMES")
+    selected_window_size = window_size or int(records[0]["shape"][0])
+    records = _rebuild_windows(records, selected_window_size)
+    feature_names = _ensure_feature_names(records)
     target_indices = tuple(feature_names.index(name) for name in target_names)
+    selected_purge_gap = horizon_steps if purge_gap_steps is None else purge_gap_steps
+    if selected_purge_gap < 0:
+        raise ValueError("purge_gap_steps must be >= 0")
 
     by_node: dict[str, list[dict[str, Any]]] = {}
     for record in records:
-        if tuple(record["feature_names"]) != feature_names:
-            raise ValueError("mixed feature_names in window dataset")
         by_node.setdefault(record["node_id"], []).append(record)
 
     arrays: dict[str, list[Any]] = {
@@ -125,40 +319,32 @@ def prepare_forecast_dataset(
         "X_test": [],
         "y_test": [],
     }
+    split_time_range: dict[str, Any] = {}
     starts: list[str] = []
     ends: list[str] = []
     for node_id in sorted(by_node):
         node_records = sorted(by_node[node_id], key=lambda item: _parse_dt(item["end_timestamp"]))
-        sample_count = len(node_records) - horizon_steps
-        if sample_count < 3:
-            continue
-        train_count, val_count, _ = _split_counts(sample_count, train_ratio, val_ratio)
-        for index in range(sample_count):
-            current = node_records[index]
-            future = node_records[index + horizon_steps]
-            split = "train" if index < train_count else "val" if index < train_count + val_count else "test"
-            arrays[f"X_{split}"].append(current["x"])
-            arrays[f"y_{split}"].append([future["x"][-1][target_index] for target_index in target_indices])
-            starts.append(current["start_timestamp"])
-            ends.append(future["end_timestamp"])
+        samples = _make_samples(node_records, horizon_steps, target_indices)
+        split_samples = _assign_temporal_splits(samples, train_ratio, val_ratio, selected_purge_gap)
+        for split, items in split_samples.items():
+            for sample in items:
+                arrays[f"X_{split}"].append(sample["x"])
+                arrays[f"y_{split}"].append(sample["y"])
+                _update_split_range(split_time_range, split, sample)
+                starts.append(sample["input_start_timestamp"])
+                ends.append(sample["label_timestamp"])
 
     if not arrays["X_train"] or not arrays["X_val"] or not arrays["X_test"]:
-        raise ValueError("not enough forecast samples to build all splits")
+        raise ValueError("not enough forecast samples to build non-overlapping splits")
+    _assert_split_ranges_do_not_overlap(split_time_range)
 
     output_path = Path(output_npz)
     meta_path = Path(output_meta)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.parent.mkdir(parents=True, exist_ok=True)
+    merged_ranges = _merged_ranges(normalization_ranges)
     np_arrays = {name: np.asarray(value, dtype=np.float32) for name, value in arrays.items()}
-    np.savez_compressed(
-        output_path,
-        **np_arrays,
-        feature_names=np.asarray(feature_names),
-        target_names=np.asarray(target_names),
-        target_indices=np.asarray(target_indices, dtype=np.int64),
-        horizon_steps=np.asarray([horizon_steps], dtype=np.int64),
-    )
-
+    created_at = _utc_now()
     total_samples = sum(int(np_arrays[name].shape[0]) for name in ("X_train", "X_val", "X_test"))
     input_shape = tuple(int(item) for item in np_arrays["X_train"].shape[1:])
     target_shape = tuple(int(item) for item in np_arrays["y_train"].shape[1:])
@@ -167,6 +353,9 @@ def prepare_forecast_dataset(
         str(output_path),
         str(meta_path),
         horizon_steps,
+        resample_interval_sec,
+        selected_window_size,
+        selected_purge_gap,
         feature_names,
         target_names,
         target_indices,
@@ -179,8 +368,25 @@ def prepare_forecast_dataset(
         tuple(sorted(by_node)),
         min(starts) if starts else None,
         max(ends) if ends else None,
+        split_time_range,
+        merged_ranges,
+        created_at,
     )
-    meta_path.write_text(json.dumps(stats.as_dict(), indent=2), encoding="utf-8")
+    dataset_meta = stats.as_dict()
+    np.savez_compressed(
+        output_path,
+        **np_arrays,
+        feature_names=np.asarray(feature_names),
+        target_names=np.asarray(target_names),
+        target_indices=np.asarray(target_indices, dtype=np.int64),
+        horizon_steps=np.asarray([horizon_steps], dtype=np.int64),
+        resample_interval_sec=np.asarray([resample_interval_sec], dtype=np.int64),
+        window_size=np.asarray([selected_window_size], dtype=np.int64),
+        purge_gap_steps=np.asarray([selected_purge_gap], dtype=np.int64),
+        normalization_ranges_json=np.asarray([_json_ranges(merged_ranges)]),
+        dataset_meta_json=np.asarray([json.dumps(dataset_meta, sort_keys=True)]),
+    )
+    meta_path.write_text(json.dumps(dataset_meta, indent=2), encoding="utf-8")
     return stats
 
 
@@ -207,6 +413,15 @@ def build_lstm_forecaster(input_size: int, output_size: int, hidden_size: int = 
     return LSTMForecaster()
 
 
+def _load_dataset_metadata(data: Any) -> dict[str, Any]:
+    return _loads_json_array_value(data.get("dataset_meta_json"), {})
+
+
+def _load_normalization_ranges(data: Any) -> dict[str, tuple[float, float]]:
+    raw = _loads_json_array_value(data.get("normalization_ranges_json"), {})
+    return {key: (float(value[0]), float(value[1])) for key, value in raw.items()}
+
+
 def train_lstm_forecast(
     dataset_npz: str | Path = "data/modeling/lstm_forecast_dataset.npz",
     output_dir: str | Path = "models/lstm_forecast/latest",
@@ -218,6 +433,7 @@ def train_lstm_forecast(
     patience: int = 5,
     seed: int = 42,
     device: str = "auto",
+    model_version: str = MODEL_VERSION,
 ) -> dict[str, Any]:
     np = _require_numpy()
     torch, nn, DataLoader, TensorDataset = _require_torch()
@@ -232,6 +448,8 @@ def train_lstm_forecast(
     y_val = data["y_val"].astype("float32")
     feature_names = tuple(str(item) for item in data["feature_names"])
     target_names = tuple(str(item) for item in data["target_names"])
+    dataset_meta = _load_dataset_metadata(data)
+    normalization_ranges = _load_normalization_ranges(data)
     resolved_device = _device_name(device)
 
     model = build_lstm_forecaster(X_train.shape[2], y_train.shape[1], hidden_size, num_layers).to(resolved_device)
@@ -276,6 +494,19 @@ def train_lstm_forecast(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     model_path = out_dir / "model.pt"
+    created_at = _utc_now()
+    model_metadata = {
+        "model_version": model_version,
+        "created_at": created_at,
+        "horizon_steps": int(data["horizon_steps"][0]) if "horizon_steps" in data else None,
+        "resample_interval_sec": int(data["resample_interval_sec"][0]) if "resample_interval_sec" in data else 60,
+        "window_size": int(data["window_size"][0]) if "window_size" in data else int(X_train.shape[1]),
+        "feature_names": list(feature_names),
+        "target_names": list(target_names),
+        "normalization_ranges": {key: list(value) for key, value in normalization_ranges.items()},
+        "dataset_meta": dataset_meta,
+        "metrics_ref": str(out_dir / "metrics.json"),
+    }
     torch.save(
         {
             "state_dict": model.state_dict(),
@@ -283,8 +514,7 @@ def train_lstm_forecast(
             "output_size": int(y_train.shape[1]),
             "hidden_size": hidden_size,
             "num_layers": num_layers,
-            "feature_names": feature_names,
-            "target_names": target_names,
+            **model_metadata,
         },
         model_path,
     )
@@ -298,9 +528,8 @@ def train_lstm_forecast(
         "best_val_loss": best_loss,
         "input_shape": list(X_train.shape[1:]),
         "target_shape": list(y_train.shape[1:]),
-        "feature_names": list(feature_names),
-        "target_names": list(target_names),
         "history": history,
+        **model_metadata,
     }
     (out_dir / "training.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
@@ -336,6 +565,21 @@ def _regression_metrics(actual, predicted, target_names: tuple[str, ...]) -> dic
     }
 
 
+def _denormalize_matrix(values, target_names: tuple[str, ...], ranges: dict[str, tuple[float, float]]):
+    np = _require_numpy()
+    output = values.astype("float32").copy()
+    for index, name in enumerate(target_names):
+        low, high = ranges.get(name, (0.0, 1.0))
+        output[:, index] = low + (output[:, index] * (high - low))
+    return output
+
+
+def _skill_score(model_rmse: float, baseline_rmse: float) -> float | None:
+    if baseline_rmse == 0:
+        return 1.0 if model_rmse == 0 else None
+    return float(1.0 - (model_rmse / baseline_rmse))
+
+
 def _metric_deltas(lstm: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
     per_target = {}
     for name, metrics in lstm["per_target"].items():
@@ -343,11 +587,13 @@ def _metric_deltas(lstm: dict[str, Any], baseline: dict[str, Any]) -> dict[str, 
         per_target[name] = {
             "mae_delta": float(metrics["mae"] - base["mae"]),
             "rmse_delta": float(metrics["rmse"] - base["rmse"]),
+            "rmse_skill_score": _skill_score(float(metrics["rmse"]), float(base["rmse"])),
             "beats_baseline": bool(metrics["rmse"] < base["rmse"]),
         }
     return {
         "overall_mae_delta": float(lstm["overall_mae"] - baseline["overall_mae"]),
         "overall_rmse_delta": float(lstm["overall_rmse"] - baseline["overall_rmse"]),
+        "overall_rmse_skill_score": _skill_score(float(lstm["overall_rmse"]), float(baseline["overall_rmse"])),
         "per_target": per_target,
     }
 
@@ -376,21 +622,34 @@ def evaluate_lstm_forecast(
     model_path: str | Path = "models/lstm_forecast/latest/model.pt",
     output_dir: str | Path | None = None,
     device: str = "auto",
+    normalization_ranges: dict[str, tuple[float, float]] | None = None,
 ) -> dict[str, Any]:
     np = _require_numpy()
     torch, _nn, _loader, _dataset = _require_torch()
     data = np.load(dataset_npz, allow_pickle=False)
-    model, _checkpoint, resolved_device = _load_model(model_path, device)
+    model, checkpoint, resolved_device = _load_model(model_path, device)
     target_names = tuple(str(item) for item in data["target_names"])
     target_indices = data["target_indices"].astype("int64")
+    dataset_meta = _load_dataset_metadata(data)
+    stored_ranges = _load_normalization_ranges(data)
+    ranges = _merged_ranges(normalization_ranges or stored_ranges)
     horizon_steps = int(data["horizon_steps"][0]) if "horizon_steps" in data else None
+    resample_interval_sec = int(data["resample_interval_sec"][0]) if "resample_interval_sec" in data else 60
     result: dict[str, Any] = {
         "model_path": str(model_path),
         "dataset_npz": str(dataset_npz),
         "device": resolved_device,
+        "model_version": checkpoint.get("model_version", MODEL_VERSION),
+        "created_at": _utc_now(),
         "target_names": list(target_names),
+        "feature_names": list(str(item) for item in data["feature_names"]),
         "horizon_steps": horizon_steps,
         "horizon_minutes_assuming_60s_resample": horizon_steps,
+        "forecast_horizon_minutes": (horizon_steps or 0) * resample_interval_sec / 60,
+        "resample_interval_sec": resample_interval_sec,
+        "window_size": int(data["window_size"][0]) if "window_size" in data else None,
+        "normalization_ranges": {key: list(value) for key, value in ranges.items()},
+        "dataset_meta": dataset_meta,
         "splits": {},
     }
     for split in ("train", "val", "test"):
@@ -401,11 +660,19 @@ def evaluate_lstm_forecast(
         baseline = x[:, -1, target_indices]
         lstm_metrics = _regression_metrics(y, pred, target_names)
         baseline_metrics = _regression_metrics(y, baseline, target_names)
+        y_denorm = _denormalize_matrix(y, target_names, ranges)
+        pred_denorm = _denormalize_matrix(pred, target_names, ranges)
+        baseline_denorm = _denormalize_matrix(baseline, target_names, ranges)
+        lstm_metrics["denormalized"] = _regression_metrics(y_denorm, pred_denorm, target_names)
+        baseline_metrics["denormalized"] = _regression_metrics(y_denorm, baseline_denorm, target_names)
         result["splits"][split] = {
             "samples": int(x.shape[0]),
             "lstm": lstm_metrics,
             "last_value_baseline": baseline_metrics,
             "baseline_delta": _metric_deltas(lstm_metrics, baseline_metrics),
+            "denormalized_baseline_delta": _metric_deltas(
+                lstm_metrics["denormalized"], baseline_metrics["denormalized"]
+            ),
         }
     result["nan_count"] = int(sum(np.isnan(data[name]).sum() for name in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test")))
     result["inf_count"] = int(sum(np.isinf(data[name]).sum() for name in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test")))
@@ -415,7 +682,9 @@ def evaluate_lstm_forecast(
     result["status"] = result["data_status"]
     output_path = Path(model_path).parent if output_dir is None else Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    (output_path / "metrics.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    metrics_path = output_path / "metrics.json"
+    result["metrics_ref"] = str(metrics_path)
+    metrics_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
 
 
@@ -424,7 +693,7 @@ def _denormalize_values(
     values: list[float],
     ranges: dict[str, tuple[float, float]] | None = None,
 ) -> dict[str, float]:
-    configured = {**DEFAULT_RANGES, **(ranges or {})}
+    configured = _merged_ranges(ranges)
     result: dict[str, float] = {}
     for name, value in zip(target_names, values, strict=True):
         low, high = configured.get(name, (0.0, 1.0))
@@ -445,6 +714,10 @@ def predict_lstm_forecast(
     model, checkpoint, resolved_device = _load_model(model_path, device)
     feature_names = tuple(checkpoint["feature_names"])
     target_names = tuple(checkpoint["target_names"])
+    ranges = _merged_ranges(normalization_ranges or {
+        key: (float(value[0]), float(value[1]))
+        for key, value in checkpoint.get("normalization_ranges", {}).items()
+    })
     output_path = Path(output_jsonl)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     count = 0
@@ -456,6 +729,8 @@ def predict_lstm_forecast(
             with torch.no_grad():
                 pred = model(torch.from_numpy(x).to(resolved_device)).detach().cpu().numpy()[0]
             prediction_normalized = [float(value) for value in pred]
+            horizon_steps = checkpoint.get("horizon_steps")
+            resample_interval_sec = checkpoint.get("resample_interval_sec", 60)
             out.write(json.dumps({
                 "gateway_id": record["gateway_id"],
                 "node_id": record["node_id"],
@@ -464,7 +739,11 @@ def predict_lstm_forecast(
                 "input_end_timestamp": record["end_timestamp"],
                 "target_names": list(target_names),
                 "prediction_normalized": prediction_normalized,
-                "prediction_values": _denormalize_values(target_names, prediction_normalized, normalization_ranges),
+                "prediction_values": _denormalize_values(target_names, prediction_normalized, ranges),
+                "model_version": checkpoint.get("model_version", MODEL_VERSION),
+                "forecast_horizon_steps": horizon_steps,
+                "forecast_horizon_minutes": (horizon_steps or 0) * resample_interval_sec / 60,
+                "metrics_ref": checkpoint.get("metrics_ref"),
             }, separators=(",", ":")) + "\n")
             count += 1
             if max_windows and count >= max_windows:
@@ -472,30 +751,73 @@ def predict_lstm_forecast(
     return output_path
 
 
-def _write_experiment_summary(output_dir: Path, rows: list[dict[str, Any]]) -> None:
-    (output_dir / "summary.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
-    if not rows:
-        return
+def _summary_columns(rows: list[dict[str, Any]]) -> list[str]:
     columns = [
         "run_id",
         "horizon_steps",
-        "horizon_minutes_assuming_60s_resample",
+        "forecast_horizon_minutes",
+        "window_size",
         "hidden_size",
         "epochs_ran",
         "data_status",
         "baseline_comparison_status",
         "model_readiness",
         "test_samples",
-        "test_lstm_mae",
         "test_lstm_rmse",
-        "test_baseline_mae",
         "test_baseline_rmse",
-        "test_rmse_delta",
+        "test_rmse_skill_score",
     ]
+    for target in TARGET_NAMES:
+        columns.extend([
+            f"{target}_rmse",
+            f"{target}_baseline_rmse",
+            f"{target}_skill_score",
+            f"{target}_denorm_rmse",
+            f"{target}_baseline_denorm_rmse",
+        ])
+    columns.extend([key for key in rows[0] if key not in columns])
+    return columns
+
+
+def _write_experiment_summary(output_dir: Path, rows: list[dict[str, Any]]) -> None:
+    (output_dir / "summary.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    if not rows:
+        return
     with (output_dir / "summary.csv").open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=columns, extrasaction="ignore")
+        writer = csv.DictWriter(file, fieldnames=_summary_columns(rows), extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _experiment_row(run_id: str, stats: ForecastDatasetStats, training: dict[str, Any], metrics: dict[str, Any], hidden_size: int) -> dict[str, Any]:
+    test = metrics["splits"]["test"]
+    row = {
+        "run_id": run_id,
+        "horizon_steps": stats.horizon_steps,
+        "forecast_horizon_minutes": stats.horizon_steps * stats.resample_interval_sec / 60,
+        "window_size": stats.window_size,
+        "hidden_size": hidden_size,
+        "epochs_ran": training["epochs_ran"],
+        "data_status": metrics["data_status"],
+        "baseline_comparison_status": metrics["baseline_comparison_status"],
+        "model_readiness": metrics["model_readiness"],
+        "test_samples": test["samples"],
+        "test_lstm_mae": test["lstm"]["overall_mae"],
+        "test_lstm_rmse": test["lstm"]["overall_rmse"],
+        "test_baseline_mae": test["last_value_baseline"]["overall_mae"],
+        "test_baseline_rmse": test["last_value_baseline"]["overall_rmse"],
+        "test_rmse_skill_score": test["baseline_delta"]["overall_rmse_skill_score"],
+        "input_shape": list(stats.input_shape),
+        "target_shape": list(stats.target_shape),
+        "run_dir": str(Path(training["model_path"]).parent),
+    }
+    for target in stats.target_names:
+        row[f"{target}_rmse"] = test["lstm"]["per_target"][target]["rmse"]
+        row[f"{target}_baseline_rmse"] = test["last_value_baseline"]["per_target"][target]["rmse"]
+        row[f"{target}_skill_score"] = test["baseline_delta"]["per_target"][target]["rmse_skill_score"]
+        row[f"{target}_denorm_rmse"] = test["lstm"]["denormalized"]["per_target"][target]["rmse"]
+        row[f"{target}_baseline_denorm_rmse"] = test["last_value_baseline"]["denormalized"]["per_target"][target]["rmse"]
+    return row
 
 
 def run_forecast_experiments(
@@ -510,55 +832,85 @@ def run_forecast_experiments(
     patience: int = 5,
     seed: int = 42,
     device: str = "auto",
+    window_sizes: tuple[int, ...] = (12,),
+    resample_interval_sec: int = 60,
+    normalization_ranges: dict[str, tuple[float, float]] | None = None,
+    model_version: str = MODEL_VERSION,
 ) -> list[dict[str, Any]]:
     output_path = Path(output_dir)
     runs_path = output_path / "runs"
     runs_path.mkdir(parents=True, exist_ok=True)
     summary: list[dict[str, Any]] = []
-    for horizon in horizons:
-        if horizon < 1:
-            raise ValueError("horizons must be positive integers")
-        for hidden_size in hidden_sizes:
-            if hidden_size < 1:
-                raise ValueError("hidden_sizes must be positive integers")
-            run_id = f"h{horizon}_hidden{hidden_size}"
-            run_dir = runs_path / run_id
-            dataset_path = run_dir / "dataset.npz"
-            meta_path = run_dir / "dataset_meta.json"
-            stats = prepare_forecast_dataset(windows_jsonl, dataset_path, meta_path, horizon)
-            training = train_lstm_forecast(
-                dataset_path,
-                run_dir,
-                epochs,
-                batch_size,
-                learning_rate,
-                hidden_size,
-                num_layers,
-                patience,
-                seed,
-                device,
-            )
-            metrics = evaluate_lstm_forecast(dataset_path, training["model_path"], run_dir, device)
-            test = metrics["splits"]["test"]
-            row = {
-                "run_id": run_id,
-                "horizon_steps": horizon,
-                "horizon_minutes_assuming_60s_resample": horizon,
-                "hidden_size": hidden_size,
-                "epochs_ran": training["epochs_ran"],
-                "data_status": metrics["data_status"],
-                "baseline_comparison_status": metrics["baseline_comparison_status"],
-                "model_readiness": metrics["model_readiness"],
-                "test_samples": test["samples"],
-                "test_lstm_mae": test["lstm"]["overall_mae"],
-                "test_lstm_rmse": test["lstm"]["overall_rmse"],
-                "test_baseline_mae": test["last_value_baseline"]["overall_mae"],
-                "test_baseline_rmse": test["last_value_baseline"]["overall_rmse"],
-                "test_rmse_delta": test["baseline_delta"]["overall_rmse_delta"],
-                "input_shape": list(stats.input_shape),
-                "target_shape": list(stats.target_shape),
-                "run_dir": str(run_dir),
-            }
-            summary.append(row)
-            _write_experiment_summary(output_path, summary)
+    for window_size in window_sizes:
+        if window_size < 1:
+            raise ValueError("window_sizes must be positive integers")
+        for horizon in horizons:
+            if horizon < 1:
+                raise ValueError("horizons must be positive integers")
+            for hidden_size in hidden_sizes:
+                if hidden_size < 1:
+                    raise ValueError("hidden_sizes must be positive integers")
+                run_id = f"w{window_size}_h{horizon}_hidden{hidden_size}"
+                run_dir = runs_path / run_id
+                dataset_path = run_dir / "dataset.npz"
+                meta_path = run_dir / "dataset_meta.json"
+                stats = prepare_forecast_dataset(
+                    windows_jsonl,
+                    dataset_path,
+                    meta_path,
+                    horizon,
+                    resample_interval_sec=resample_interval_sec,
+                    window_size=window_size,
+                    normalization_ranges=normalization_ranges,
+                )
+                training = train_lstm_forecast(
+                    dataset_path,
+                    run_dir,
+                    epochs,
+                    batch_size,
+                    learning_rate,
+                    hidden_size,
+                    num_layers,
+                    patience,
+                    seed,
+                    device,
+                    model_version,
+                )
+                metrics = evaluate_lstm_forecast(dataset_path, training["model_path"], run_dir, device, normalization_ranges)
+                summary.append(_experiment_row(run_id, stats, training, metrics, hidden_size))
+                _write_experiment_summary(output_path, summary)
     return summary
+
+
+def build_forecast_payload_v1(
+    predictions_jsonl: str | Path,
+    metrics_json: str | Path,
+    output_jsonl: str | Path,
+    metrics_ref: str | None = None,
+) -> Path:
+    metrics_path = Path(metrics_json)
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    output_path = Path(output_jsonl)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ref = metrics_ref or str(metrics_path)
+    with Path(predictions_jsonl).open(encoding="utf-8") as src, output_path.open("w", encoding="utf-8") as dst:
+        for line in src:
+            if not line.strip():
+                continue
+            prediction = json.loads(line)
+            payload = {
+                "schema": "iiot.ai_sensor.forecast.v1",
+                "gateway_id": prediction["gateway_id"],
+                "node_id": prediction["node_id"],
+                "room_id": prediction["room_id"],
+                "input_start_timestamp": prediction["input_start_timestamp"],
+                "input_end_timestamp": prediction["input_end_timestamp"],
+                "forecast_horizon_steps": prediction.get("forecast_horizon_steps") or metrics.get("horizon_steps"),
+                "forecast_horizon_minutes": prediction.get("forecast_horizon_minutes") or metrics.get("forecast_horizon_minutes"),
+                "predicted_sensor": prediction.get("prediction_values", {}),
+                "model_version": prediction.get("model_version") or metrics.get("model_version", MODEL_VERSION),
+                "metrics_ref": ref,
+                "model_readiness": metrics.get("model_readiness", "EXPERIMENTAL"),
+            }
+            dst.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    return output_path

@@ -142,12 +142,13 @@ py -3.13 run_gateway.py prepare-forecast-dataset --windows data/processed/lstm_w
 py -3.13 run_gateway.py train-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --output-dir models/lstm_forecast/latest --epochs 30 --batch-size 64 --hidden-size 64 --device auto
 py -3.13 run_gateway.py evaluate-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --model models/lstm_forecast/latest/model.pt
 py -3.13 run_gateway.py predict-lstm-forecast --windows data/processed/lstm_windows.jsonl --model models/lstm_forecast/latest/model.pt --output models/lstm_forecast/latest/predictions.jsonl --max-windows 10
+py -3.13 run_gateway.py build-forecast-payload-v1 --predictions models/lstm_forecast/latest/predictions.jsonl --metrics models/lstm_forecast/latest/metrics.json --output models/lstm_forecast/latest/forecast_payloads.jsonl
 ```
 
 Untuk membandingkan beberapa horizon dan ukuran LSTM sekaligus:
 
 ```powershell
-py -3.13 run_gateway.py run-forecast-experiments --windows data/processed/lstm_windows.jsonl --output-dir models/forecast_experiments/latest --horizons 5,15,30 --hidden-sizes 32,64 --epochs 30 --batch-size 64 --device auto
+py -3.13 run_gateway.py run-forecast-experiments --windows data/processed/lstm_windows.jsonl --output-dir models/forecast_experiments/latest --horizons 5,15,30 --window-sizes 12,24,36 --hidden-sizes 32,64 --epochs 30 --batch-size 64 --device auto
 ```
 
 Output model dan dataset training berada di `data/modeling/` dan `models/`, lalu
@@ -156,6 +157,7 @@ di-ignore dari Git. Detail ada di `docs/lstm-forecasting.md`.
 Evaluator forecasting sekarang memisahkan status data, perbandingan baseline,
 dan kesiapan model. Jika LSTM kalah dari `last_value_baseline`, pipeline tetap
 valid, tetapi model masih dianggap tahap eksperimen.
+Metrics juga tersedia dalam skala normalized dan satuan asli hasil denormalisasi.
 
 ## Verifikasi Python
 

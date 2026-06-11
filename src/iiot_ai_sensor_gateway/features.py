@@ -16,8 +16,20 @@ def _value(point: ResampledPoint | None, name: str) -> float:
     value = getattr(point.sensor, name)
     return float(value) if value is not None else 0.0
 
+
+def _present_value(point: ResampledPoint | None, name: str) -> float | None:
+    if point is None:
+        return None
+    value = getattr(point.sensor, name)
+    return float(value) if value is not None else None
+
+
 def _gas(point: ResampledPoint | None) -> float:
-    return _value(point, 'voc_raw') or _value(point, 'bme_gas_raw') or _value(point, 'co_raw') or _value(point, 'gas_raw')
+    for name in ('voc_raw', 'bme_gas_raw', 'co_raw', 'gas_raw'):
+        value = _present_value(point, name)
+        if value is not None:
+            return value
+    return 0.0
 
 def extract_features(points: list[ResampledPoint]) -> list[FeatureVector]:
     vectors: list[FeatureVector] = []

@@ -12,6 +12,7 @@ from .evaluation import evaluate_preprocessing, write_evaluation_report
 from .esp32_sim import simulate_gary_esp32_payloads
 from .features import extract_features
 from .forecasting import (
+    build_forecast_payload_v1,
     evaluate_lstm_forecast,
     predict_lstm_forecast,
     prepare_forecast_dataset,
@@ -70,10 +71,13 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument('--simulation-layer', default='dataset_or_esp32_light_preprocessing')
     ev.add_argument('--gateway-layer', default='raspberry_pi_pre_model_pipeline')
     prep_forecast = sub.add_parser('prepare-forecast-dataset', help='build temporal X/y dataset for LSTM forecasting')
+    prep_forecast.add_argument('--config', default='config/default.toml')
     prep_forecast.add_argument('--windows', default='data/processed/lstm_windows.jsonl')
     prep_forecast.add_argument('--output-npz', default='data/modeling/lstm_forecast_dataset.npz')
     prep_forecast.add_argument('--output-meta', default='data/modeling/lstm_forecast_dataset_meta.json')
     prep_forecast.add_argument('--horizon-steps', type=int, default=5)
+    prep_forecast.add_argument('--window-size', type=int, default=0)
+    prep_forecast.add_argument('--purge-gap-steps', type=int, default=-1)
     train_forecast = sub.add_parser('train-lstm-forecast', help='train PyTorch LSTM multi-target forecasting model')
     train_forecast.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
     train_forecast.add_argument('--output-dir', default='models/lstm_forecast/latest')
@@ -85,7 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
     train_forecast.add_argument('--patience', type=int, default=5)
     train_forecast.add_argument('--seed', type=int, default=42)
     train_forecast.add_argument('--device', default='auto')
+    train_forecast.add_argument('--model-version', default='lstm_forecast_v1')
     eval_forecast = sub.add_parser('evaluate-lstm-forecast', help='evaluate LSTM forecast metrics and baseline')
+    eval_forecast.add_argument('--config', default='config/default.toml')
     eval_forecast.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
     eval_forecast.add_argument('--model', default='models/lstm_forecast/latest/model.pt')
     eval_forecast.add_argument('--output-dir', default=None)
@@ -102,6 +108,8 @@ def build_parser() -> argparse.ArgumentParser:
     experiments.add_argument('--output-dir', default='models/forecast_experiments/latest')
     experiments.add_argument('--horizons', type=_parse_int_list, default=(5, 15, 30))
     experiments.add_argument('--hidden-sizes', type=_parse_int_list, default=(32, 64))
+    experiments.add_argument('--window-sizes', type=_parse_int_list, default=(12,))
+    experiments.add_argument('--config', default='config/default.toml')
     experiments.add_argument('--epochs', type=int, default=30)
     experiments.add_argument('--batch-size', type=int, default=64)
     experiments.add_argument('--learning-rate', type=float, default=0.001)
@@ -109,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
     experiments.add_argument('--patience', type=int, default=5)
     experiments.add_argument('--seed', type=int, default=42)
     experiments.add_argument('--device', default='auto')
+    experiments.add_argument('--model-version', default='lstm_forecast_v1')
+    payload = sub.add_parser('build-forecast-payload-v1', help='build decision-layer-ready forecast payload JSONL')
+    payload.add_argument('--predictions', default='models/lstm_forecast/latest/predictions.jsonl')
+    payload.add_argument('--metrics', default='models/lstm_forecast/latest/metrics.json')
+    payload.add_argument('--output', default='models/lstm_forecast/latest/forecast_payloads.jsonl')
+    payload.add_argument('--metrics-ref', default=None)
     sub.add_parser('check-config', help='load config and exit')
     return parser
 
@@ -184,7 +198,17 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result.as_dict(), indent=2))
         return 0
     if args.cmd == 'prepare-forecast-dataset':
-        stats = prepare_forecast_dataset(args.windows, args.output_npz, args.output_meta, args.horizon_steps)
+        config = load_config(args.config)
+        stats = prepare_forecast_dataset(
+            args.windows,
+            args.output_npz,
+            args.output_meta,
+            args.horizon_steps,
+            resample_interval_sec=config.pipeline.resample_interval_sec,
+            window_size=args.window_size or None,
+            purge_gap_steps=None if args.purge_gap_steps < 0 else args.purge_gap_steps,
+            normalization_ranges=config.normalization_ranges,
+        )
         print(json.dumps(stats.as_dict(), indent=2))
         return 0
     if args.cmd == 'train-lstm-forecast':
@@ -199,11 +223,13 @@ def main(argv: list[str] | None = None) -> int:
             args.patience,
             args.seed,
             args.device,
+            args.model_version,
         )
         print(json.dumps(result, indent=2))
         return 0
     if args.cmd == 'evaluate-lstm-forecast':
-        result = evaluate_lstm_forecast(args.dataset, args.model, args.output_dir, args.device)
+        config = load_config(args.config)
+        result = evaluate_lstm_forecast(args.dataset, args.model, args.output_dir, args.device, config.normalization_ranges)
         print(json.dumps(result, indent=2))
         return 0
     if args.cmd == 'predict-lstm-forecast':
@@ -224,8 +250,16 @@ def main(argv: list[str] | None = None) -> int:
             args.patience,
             args.seed,
             args.device,
+            args.window_sizes,
+            load_config(args.config).pipeline.resample_interval_sec,
+            load_config(args.config).normalization_ranges,
+            args.model_version,
         )
         print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'build-forecast-payload-v1':
+        output = build_forecast_payload_v1(args.predictions, args.metrics, args.output, args.metrics_ref)
+        print(output)
         return 0
     if args.cmd == 'check-config':
         load_config()
