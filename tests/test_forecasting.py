@@ -21,6 +21,7 @@ from iiot_ai_sensor_gateway.forecasting import (
     evaluate_lstm_forecast,
     predict_lstm_forecast,
     prepare_forecast_dataset,
+    run_forecast_experiments,
     train_lstm_forecast,
 )
 
@@ -102,7 +103,11 @@ class ForecastingTests(unittest.TestCase):
 
             metrics = evaluate_lstm_forecast(dataset, train['model_path'], model_dir, device='cpu')
             self.assertEqual(metrics['status'], 'PASS')
+            self.assertEqual(metrics['data_status'], 'PASS')
+            self.assertIn(metrics['baseline_comparison_status'], {'BEATS_BASELINE', 'UNDER_BASELINE', 'MIXED'})
+            self.assertIn(metrics['model_readiness'], {'PROMISING', 'EXPERIMENTAL', 'NOT_READY'})
             self.assertIn('last_value_baseline', metrics['splits']['test'])
+            self.assertIn('baseline_delta', metrics['splits']['test'])
             self.assertEqual(metrics['nan_count'], 0)
             self.assertEqual(metrics['inf_count'], 0)
 
@@ -112,6 +117,31 @@ class ForecastingTests(unittest.TestCase):
             first = json.loads(lines[0])
             self.assertEqual(first['target_names'], list(TARGET_NAMES))
             self.assertEqual(len(first['prediction_normalized']), len(TARGET_NAMES))
+            self.assertEqual(set(first['prediction_values']), set(TARGET_NAMES))
+
+    def test_run_forecast_experiments_writes_summary(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            windows = temp / 'windows.jsonl'
+            output_dir = temp / 'experiments'
+            _write_windows(windows, nodes=1, count=18, timesteps=4)
+
+            summary = run_forecast_experiments(
+                windows,
+                output_dir,
+                horizons=(2,),
+                hidden_sizes=(8,),
+                epochs=1,
+                batch_size=4,
+                patience=1,
+                device='cpu',
+            )
+
+            self.assertEqual(len(summary), 1)
+            self.assertEqual(summary[0]['run_id'], 'h2_hidden8')
+            self.assertTrue((output_dir / 'summary.json').exists())
+            self.assertTrue((output_dir / 'summary.csv').exists())
+            self.assertTrue((output_dir / 'runs' / 'h2_hidden8' / 'metrics.json').exists())
 
 
 if __name__ == '__main__':

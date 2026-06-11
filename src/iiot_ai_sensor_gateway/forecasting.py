@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import csv
 import json
 import math
 import random
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .features import FEATURE_NAMES
+from .normalization import DEFAULT_RANGES
 
 TARGET_NAMES = ("temperature_c", "humidity_pct", "pressure_hpa", "bme_gas_raw", "co_raw")
 
@@ -334,6 +336,41 @@ def _regression_metrics(actual, predicted, target_names: tuple[str, ...]) -> dic
     }
 
 
+def _metric_deltas(lstm: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
+    per_target = {}
+    for name, metrics in lstm["per_target"].items():
+        base = baseline["per_target"][name]
+        per_target[name] = {
+            "mae_delta": float(metrics["mae"] - base["mae"]),
+            "rmse_delta": float(metrics["rmse"] - base["rmse"]),
+            "beats_baseline": bool(metrics["rmse"] < base["rmse"]),
+        }
+    return {
+        "overall_mae_delta": float(lstm["overall_mae"] - baseline["overall_mae"]),
+        "overall_rmse_delta": float(lstm["overall_rmse"] - baseline["overall_rmse"]),
+        "per_target": per_target,
+    }
+
+
+def _baseline_status(test_metrics: dict[str, Any]) -> str:
+    deltas = test_metrics["baseline_delta"]["per_target"].values()
+    wins = sum(1 for item in deltas if item["beats_baseline"])
+    total = len(test_metrics["baseline_delta"]["per_target"])
+    if wins == total and test_metrics["baseline_delta"]["overall_rmse_delta"] < 0:
+        return "BEATS_BASELINE"
+    if wins == 0 and test_metrics["baseline_delta"]["overall_rmse_delta"] >= 0:
+        return "UNDER_BASELINE"
+    return "MIXED"
+
+
+def _model_readiness(data_status: str, baseline_status: str) -> str:
+    if data_status != "PASS":
+        return "NOT_READY"
+    if baseline_status == "BEATS_BASELINE":
+        return "PROMISING"
+    return "EXPERIMENTAL"
+
+
 def evaluate_lstm_forecast(
     dataset_npz: str | Path = "data/modeling/lstm_forecast_dataset.npz",
     model_path: str | Path = "models/lstm_forecast/latest/model.pt",
@@ -346,11 +383,14 @@ def evaluate_lstm_forecast(
     model, _checkpoint, resolved_device = _load_model(model_path, device)
     target_names = tuple(str(item) for item in data["target_names"])
     target_indices = data["target_indices"].astype("int64")
+    horizon_steps = int(data["horizon_steps"][0]) if "horizon_steps" in data else None
     result: dict[str, Any] = {
         "model_path": str(model_path),
         "dataset_npz": str(dataset_npz),
         "device": resolved_device,
         "target_names": list(target_names),
+        "horizon_steps": horizon_steps,
+        "horizon_minutes_assuming_60s_resample": horizon_steps,
         "splits": {},
     }
     for split in ("train", "val", "test"):
@@ -359,17 +399,36 @@ def evaluate_lstm_forecast(
         with torch.no_grad():
             pred = model(torch.from_numpy(x).to(resolved_device)).detach().cpu().numpy()
         baseline = x[:, -1, target_indices]
+        lstm_metrics = _regression_metrics(y, pred, target_names)
+        baseline_metrics = _regression_metrics(y, baseline, target_names)
         result["splits"][split] = {
             "samples": int(x.shape[0]),
-            "lstm": _regression_metrics(y, pred, target_names),
-            "last_value_baseline": _regression_metrics(y, baseline, target_names),
+            "lstm": lstm_metrics,
+            "last_value_baseline": baseline_metrics,
+            "baseline_delta": _metric_deltas(lstm_metrics, baseline_metrics),
         }
     result["nan_count"] = int(sum(np.isnan(data[name]).sum() for name in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test")))
     result["inf_count"] = int(sum(np.isinf(data[name]).sum() for name in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test")))
-    result["status"] = "PASS" if result["nan_count"] == 0 and result["inf_count"] == 0 else "FAIL"
+    result["data_status"] = "PASS" if result["nan_count"] == 0 and result["inf_count"] == 0 else "FAIL"
+    result["baseline_comparison_status"] = _baseline_status(result["splits"]["test"])
+    result["model_readiness"] = _model_readiness(result["data_status"], result["baseline_comparison_status"])
+    result["status"] = result["data_status"]
     output_path = Path(model_path).parent if output_dir is None else Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     (output_path / "metrics.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return result
+
+
+def _denormalize_values(
+    target_names: tuple[str, ...],
+    values: list[float],
+    ranges: dict[str, tuple[float, float]] | None = None,
+) -> dict[str, float]:
+    configured = {**DEFAULT_RANGES, **(ranges or {})}
+    result: dict[str, float] = {}
+    for name, value in zip(target_names, values, strict=True):
+        low, high = configured.get(name, (0.0, 1.0))
+        result[name] = float(low + (float(value) * (high - low)))
     return result
 
 
@@ -379,6 +438,7 @@ def predict_lstm_forecast(
     output_jsonl: str | Path,
     max_windows: int = 0,
     device: str = "auto",
+    normalization_ranges: dict[str, tuple[float, float]] | None = None,
 ) -> Path:
     np = _require_numpy()
     torch, _nn, _loader, _dataset = _require_torch()
@@ -395,6 +455,7 @@ def predict_lstm_forecast(
             x = np.asarray([record["x"]], dtype=np.float32)
             with torch.no_grad():
                 pred = model(torch.from_numpy(x).to(resolved_device)).detach().cpu().numpy()[0]
+            prediction_normalized = [float(value) for value in pred]
             out.write(json.dumps({
                 "gateway_id": record["gateway_id"],
                 "node_id": record["node_id"],
@@ -402,9 +463,102 @@ def predict_lstm_forecast(
                 "input_start_timestamp": record["start_timestamp"],
                 "input_end_timestamp": record["end_timestamp"],
                 "target_names": list(target_names),
-                "prediction_normalized": [float(value) for value in pred],
+                "prediction_normalized": prediction_normalized,
+                "prediction_values": _denormalize_values(target_names, prediction_normalized, normalization_ranges),
             }, separators=(",", ":")) + "\n")
             count += 1
             if max_windows and count >= max_windows:
                 break
     return output_path
+
+
+def _write_experiment_summary(output_dir: Path, rows: list[dict[str, Any]]) -> None:
+    (output_dir / "summary.json").write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    if not rows:
+        return
+    columns = [
+        "run_id",
+        "horizon_steps",
+        "horizon_minutes_assuming_60s_resample",
+        "hidden_size",
+        "epochs_ran",
+        "data_status",
+        "baseline_comparison_status",
+        "model_readiness",
+        "test_samples",
+        "test_lstm_mae",
+        "test_lstm_rmse",
+        "test_baseline_mae",
+        "test_baseline_rmse",
+        "test_rmse_delta",
+    ]
+    with (output_dir / "summary.csv").open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def run_forecast_experiments(
+    windows_jsonl: str | Path = "data/processed/lstm_windows.jsonl",
+    output_dir: str | Path = "models/forecast_experiments/latest",
+    horizons: tuple[int, ...] = (5, 15, 30),
+    hidden_sizes: tuple[int, ...] = (32, 64),
+    epochs: int = 30,
+    batch_size: int = 64,
+    learning_rate: float = 0.001,
+    num_layers: int = 1,
+    patience: int = 5,
+    seed: int = 42,
+    device: str = "auto",
+) -> list[dict[str, Any]]:
+    output_path = Path(output_dir)
+    runs_path = output_path / "runs"
+    runs_path.mkdir(parents=True, exist_ok=True)
+    summary: list[dict[str, Any]] = []
+    for horizon in horizons:
+        if horizon < 1:
+            raise ValueError("horizons must be positive integers")
+        for hidden_size in hidden_sizes:
+            if hidden_size < 1:
+                raise ValueError("hidden_sizes must be positive integers")
+            run_id = f"h{horizon}_hidden{hidden_size}"
+            run_dir = runs_path / run_id
+            dataset_path = run_dir / "dataset.npz"
+            meta_path = run_dir / "dataset_meta.json"
+            stats = prepare_forecast_dataset(windows_jsonl, dataset_path, meta_path, horizon)
+            training = train_lstm_forecast(
+                dataset_path,
+                run_dir,
+                epochs,
+                batch_size,
+                learning_rate,
+                hidden_size,
+                num_layers,
+                patience,
+                seed,
+                device,
+            )
+            metrics = evaluate_lstm_forecast(dataset_path, training["model_path"], run_dir, device)
+            test = metrics["splits"]["test"]
+            row = {
+                "run_id": run_id,
+                "horizon_steps": horizon,
+                "horizon_minutes_assuming_60s_resample": horizon,
+                "hidden_size": hidden_size,
+                "epochs_ran": training["epochs_ran"],
+                "data_status": metrics["data_status"],
+                "baseline_comparison_status": metrics["baseline_comparison_status"],
+                "model_readiness": metrics["model_readiness"],
+                "test_samples": test["samples"],
+                "test_lstm_mae": test["lstm"]["overall_mae"],
+                "test_lstm_rmse": test["lstm"]["overall_rmse"],
+                "test_baseline_mae": test["last_value_baseline"]["overall_mae"],
+                "test_baseline_rmse": test["last_value_baseline"]["overall_rmse"],
+                "test_rmse_delta": test["baseline_delta"]["overall_rmse_delta"],
+                "input_shape": list(stats.input_shape),
+                "target_shape": list(stats.target_shape),
+                "run_dir": str(run_dir),
+            }
+            summary.append(row)
+            _write_experiment_summary(output_path, summary)
+    return summary

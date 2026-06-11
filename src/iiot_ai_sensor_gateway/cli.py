@@ -15,6 +15,7 @@ from .forecasting import (
     evaluate_lstm_forecast,
     predict_lstm_forecast,
     prepare_forecast_dataset,
+    run_forecast_experiments,
     train_lstm_forecast,
 )
 from .normalization import MinMaxNormalizer
@@ -23,6 +24,13 @@ from .resampling import resample
 from .simulator import SCENARIOS, write_simulation
 from .validation import ReadingValidator
 from .windowing import WindowBuilder
+
+
+def _parse_int_list(value: str) -> tuple[int, ...]:
+    items = tuple(int(item.strip()) for item in value.split(',') if item.strip())
+    if not items:
+        raise argparse.ArgumentTypeError('expected comma-separated integers')
+    return items
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='IIoT AI sensor gateway pre-model pipeline')
@@ -83,11 +91,24 @@ def build_parser() -> argparse.ArgumentParser:
     eval_forecast.add_argument('--output-dir', default=None)
     eval_forecast.add_argument('--device', default='auto')
     pred_forecast = sub.add_parser('predict-lstm-forecast', help='predict normalized sensor targets from windows')
+    pred_forecast.add_argument('--config', default='config/default.toml')
     pred_forecast.add_argument('--windows', default='data/processed/lstm_windows.jsonl')
     pred_forecast.add_argument('--model', default='models/lstm_forecast/latest/model.pt')
     pred_forecast.add_argument('--output', default='models/lstm_forecast/latest/predictions.jsonl')
     pred_forecast.add_argument('--max-windows', type=int, default=0)
     pred_forecast.add_argument('--device', default='auto')
+    experiments = sub.add_parser('run-forecast-experiments', help='run LSTM forecasting experiments across horizons and hidden sizes')
+    experiments.add_argument('--windows', default='data/processed/lstm_windows.jsonl')
+    experiments.add_argument('--output-dir', default='models/forecast_experiments/latest')
+    experiments.add_argument('--horizons', type=_parse_int_list, default=(5, 15, 30))
+    experiments.add_argument('--hidden-sizes', type=_parse_int_list, default=(32, 64))
+    experiments.add_argument('--epochs', type=int, default=30)
+    experiments.add_argument('--batch-size', type=int, default=64)
+    experiments.add_argument('--learning-rate', type=float, default=0.001)
+    experiments.add_argument('--num-layers', type=int, default=1)
+    experiments.add_argument('--patience', type=int, default=5)
+    experiments.add_argument('--seed', type=int, default=42)
+    experiments.add_argument('--device', default='auto')
     sub.add_parser('check-config', help='load config and exit')
     return parser
 
@@ -186,8 +207,25 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, indent=2))
         return 0
     if args.cmd == 'predict-lstm-forecast':
-        output = predict_lstm_forecast(args.windows, args.model, args.output, args.max_windows, args.device)
+        config = load_config(args.config)
+        output = predict_lstm_forecast(args.windows, args.model, args.output, args.max_windows, args.device, config.normalization_ranges)
         print(output)
+        return 0
+    if args.cmd == 'run-forecast-experiments':
+        result = run_forecast_experiments(
+            args.windows,
+            args.output_dir,
+            args.horizons,
+            args.hidden_sizes,
+            args.epochs,
+            args.batch_size,
+            args.learning_rate,
+            args.num_layers,
+            args.patience,
+            args.seed,
+            args.device,
+        )
+        print(json.dumps(result, indent=2))
         return 0
     if args.cmd == 'check-config':
         load_config()
