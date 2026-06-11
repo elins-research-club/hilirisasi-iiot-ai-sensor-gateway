@@ -21,7 +21,8 @@ Raspberry Pi menerima:
 7. Normalisasi min-max dari `config/default.toml`.
 8. Windowing per node dengan default 12 timestep.
 9. Tulis `data/processed/lstm_windows.jsonl`.
-10. Opsional: buat dataset forecasting X/y, train LSTM multi-target, lalu evaluasi MAE/RMSE.
+10. Opsional: buat dataset forecasting X/y, train LSTM multi-target, lalu evaluasi MAE/RMSE vs baseline.
+11. Opsional: jalankan experiment runner untuk membandingkan beberapa horizon dan ukuran LSTM.
 
 ## Workflow Gary yang Direkomendasikan
 
@@ -66,3 +67,14 @@ Default horizon adalah 5 step. Dengan resampling 60 detik, target berarti sekita
 5 menit setelah akhir window input. Evaluasi membandingkan LSTM dengan
 `last_value_baseline` agar performa model tidak hanya terlihat kompleks, tetapi
 punya pembanding sederhana.
+
+Untuk eksperimen yang lebih rapi, gunakan:
+
+```powershell
+py -3.13 run_gateway.py run-forecast-experiments --windows data/processed/lstm_windows.jsonl --output-dir models/forecast_experiments/latest --horizons 5,15,30 --hidden-sizes 32,64 --epochs 30 --batch-size 64 --device auto
+```
+
+Ringkasan eksperimen ditulis ke `summary.json` dan `summary.csv`. Status model
+dibaca dari `data_status`, `baseline_comparison_status`, dan `model_readiness`.
+Jika LSTM masih kalah dari baseline, pipeline tetap boleh dianggap berjalan,
+tetapi model belum cukup kuat untuk decision layer.
