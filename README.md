@@ -3,7 +3,7 @@
 Repo ini berisi dua bagian yang saling tersambung untuk Industrial Environment Monitoring berbasis IIoT:
 
 - firmware ESP32-C6 sensor node untuk preprocessing ringan dan payload LoRa;
-- pipeline Python Raspberry Pi untuk preprocessing AI/pre-model, dataset publik, evaluasi, dan window LSTM-ready.
+- pipeline Python Raspberry Pi untuk preprocessing AI/pre-model, dataset publik, evaluasi, window LSTM-ready, dan LSTM forecasting awal.
 
 Python di repo ini tidak di-upload ke ESP32-C6. Firmware ESP32-C6 ditulis sebagai C++ skeleton di folder `firmware/esp32-c6-sensor-node`.
 
@@ -15,7 +15,7 @@ BME688/BME668 + SEN0377
 -> compact payload via LoRa/Ebyte E32
 -> Raspberry Pi gateway Python pipeline
 -> validation lanjutan, resampling, feature extraction, normalization, windowing
--> LSTM-ready dataset atau AI inference
+-> LSTM-ready dataset -> LSTM forecasting multi-target atau AI inference
 ```
 
 ## Scope
@@ -46,7 +46,7 @@ Non-scope repo ini:
 - backend FastAPI, Redis, TimescaleDB, Next.js, EMQX, atau MQTT broker;
 - computer vision;
 - OpenClaw runtime;
-- model LSTM penuh;
+- model AI/prescriptive final penuh; LSTM forecasting v1 hanya model awal;
 - deployment produksi final.
 
 ## Sensor Target Project
@@ -122,6 +122,31 @@ Hasil terakhir jalur Gary derived project schema -> Raspberry Pi:
 - Output window: `data/processed/lstm_windows.jsonl`.
 - Output evaluasi: `data/evaluation/gary_project_schema_eval.json`.
 
+## LSTM Forecasting Workflow
+
+Setelah `data/processed/lstm_windows.jsonl` terbentuk, repo dapat membuat dataset
+forecasting dan melatih model LSTM multi-target dengan PyTorch. Input model tetap
+`[samples, timesteps, features]`, sedangkan target prediksi adalah sensor utama:
+`temperature_c`, `humidity_pct`, `pressure_hpa`, `bme_gas_raw`, dan `co_raw`.
+
+Install dependency ML opsional:
+
+```powershell
+py -3.13 -m pip install -e ".[ml]"
+```
+
+Siapkan dataset, train, evaluasi, dan prediksi:
+
+```powershell
+py -3.13 run_gateway.py prepare-forecast-dataset --windows data/processed/lstm_windows.jsonl --output-npz data/modeling/lstm_forecast_dataset.npz --output-meta data/modeling/lstm_forecast_dataset_meta.json --horizon-steps 5
+py -3.13 run_gateway.py train-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --output-dir models/lstm_forecast/latest --epochs 30 --batch-size 64 --hidden-size 64 --device auto
+py -3.13 run_gateway.py evaluate-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --model models/lstm_forecast/latest/model.pt
+py -3.13 run_gateway.py predict-lstm-forecast --windows data/processed/lstm_windows.jsonl --model models/lstm_forecast/latest/model.pt --output models/lstm_forecast/latest/predictions.jsonl --max-windows 10
+```
+
+Output model dan dataset training berada di `data/modeling/` dan `models/`, lalu
+di-ignore dari Git. Detail ada di `docs/lstm-forecasting.md`.
+
 ## Verifikasi Python
 
 ```powershell
@@ -135,6 +160,7 @@ py -3.13 -m unittest discover -s tests -p 'test_*.py' -q
 - `docs/architecture-preprocessing-split.md`
 - `docs/esp32-preprocessing.md`
 - `docs/raspberry-pi-pipeline.md`
+- `docs/lstm-forecasting.md`
 - `docs/data-contract.md`
 - `docs/progress-gary-derived-project-schema.md`
 - `docs/progress-gary-stafford-preprocessing.md`

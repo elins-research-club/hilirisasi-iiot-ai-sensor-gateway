@@ -21,6 +21,7 @@ Raspberry Pi menerima:
 7. Normalisasi min-max dari `config/default.toml`.
 8. Windowing per node dengan default 12 timestep.
 9. Tulis `data/processed/lstm_windows.jsonl`.
+10. Opsional: buat dataset forecasting X/y, train LSTM multi-target, lalu evaluasi MAE/RMSE.
 
 ## Workflow Gary yang Direkomendasikan
 
@@ -48,5 +49,20 @@ ESP32-C6 hanya melakukan preprocessing ringan agar payload stabil untuk LoRa. Ra
 
 - Input hardware serial/LoRa real belum diikat langsung ke reader Python.
 - MQTT publish belum diaktifkan di repo ini.
-- Model LSTM belum diimplementasikan.
+- LSTM forecasting v1 sudah tersedia sebagai workflow opsional setelah windowing; model ini memprediksi sensor utama dan belum menjadi decision layer final.
 - Gary asli tidak memiliki pressure_hpa dan BME gas raw asli. Workflow derived schema membuat pressure synthetic realistis dan BME gas raw proxy agar bentuk data sesuai sensor project.
+
+## LSTM Forecasting Setelah Windowing
+
+Workflow LSTM forecasting memakai `data/processed/lstm_windows.jsonl` sebagai input.
+Dataset builder membuat pasangan:
+
+```text
+X = window 12 timestep x 16 fitur
+y = temperature_c, humidity_pct, pressure_hpa, bme_gas_raw, co_raw pada horizon berikutnya
+```
+
+Default horizon adalah 5 step. Dengan resampling 60 detik, target berarti sekitar
+5 menit setelah akhir window input. Evaluasi membandingkan LSTM dengan
+`last_value_baseline` agar performa model tidak hanya terlihat kompleks, tetapi
+punya pembanding sederhana.
