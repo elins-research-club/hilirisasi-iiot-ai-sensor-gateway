@@ -17,11 +17,13 @@ ENV/
 .env
 data/raw/
 data/processed/
+data/modeling/
 data/logs/
 logs/
 *.log
 
 # Model/data artifacts generated locally
+models/
 *.pt
 *.onnx
 *.tflite

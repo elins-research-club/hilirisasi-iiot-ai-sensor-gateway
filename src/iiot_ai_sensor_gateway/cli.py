@@ -11,6 +11,12 @@ from .config import load_config, load_dotenv
 from .evaluation import evaluate_preprocessing, write_evaluation_report
 from .esp32_sim import simulate_gary_esp32_payloads
 from .features import extract_features
+from .forecasting import (
+    evaluate_lstm_forecast,
+    predict_lstm_forecast,
+    prepare_forecast_dataset,
+    train_lstm_forecast,
+)
 from .normalization import MinMaxNormalizer
 from .parser import PayloadParser
 from .resampling import resample
@@ -55,6 +61,33 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument('--input-source', default='gary_stafford_canonical_or_compact_payload')
     ev.add_argument('--simulation-layer', default='dataset_or_esp32_light_preprocessing')
     ev.add_argument('--gateway-layer', default='raspberry_pi_pre_model_pipeline')
+    prep_forecast = sub.add_parser('prepare-forecast-dataset', help='build temporal X/y dataset for LSTM forecasting')
+    prep_forecast.add_argument('--windows', default='data/processed/lstm_windows.jsonl')
+    prep_forecast.add_argument('--output-npz', default='data/modeling/lstm_forecast_dataset.npz')
+    prep_forecast.add_argument('--output-meta', default='data/modeling/lstm_forecast_dataset_meta.json')
+    prep_forecast.add_argument('--horizon-steps', type=int, default=5)
+    train_forecast = sub.add_parser('train-lstm-forecast', help='train PyTorch LSTM multi-target forecasting model')
+    train_forecast.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
+    train_forecast.add_argument('--output-dir', default='models/lstm_forecast/latest')
+    train_forecast.add_argument('--epochs', type=int, default=30)
+    train_forecast.add_argument('--batch-size', type=int, default=64)
+    train_forecast.add_argument('--learning-rate', type=float, default=0.001)
+    train_forecast.add_argument('--hidden-size', type=int, default=64)
+    train_forecast.add_argument('--num-layers', type=int, default=1)
+    train_forecast.add_argument('--patience', type=int, default=5)
+    train_forecast.add_argument('--seed', type=int, default=42)
+    train_forecast.add_argument('--device', default='auto')
+    eval_forecast = sub.add_parser('evaluate-lstm-forecast', help='evaluate LSTM forecast metrics and baseline')
+    eval_forecast.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
+    eval_forecast.add_argument('--model', default='models/lstm_forecast/latest/model.pt')
+    eval_forecast.add_argument('--output-dir', default=None)
+    eval_forecast.add_argument('--device', default='auto')
+    pred_forecast = sub.add_parser('predict-lstm-forecast', help='predict normalized sensor targets from windows')
+    pred_forecast.add_argument('--windows', default='data/processed/lstm_windows.jsonl')
+    pred_forecast.add_argument('--model', default='models/lstm_forecast/latest/model.pt')
+    pred_forecast.add_argument('--output', default='models/lstm_forecast/latest/predictions.jsonl')
+    pred_forecast.add_argument('--max-windows', type=int, default=0)
+    pred_forecast.add_argument('--device', default='auto')
     sub.add_parser('check-config', help='load config and exit')
     return parser
 
@@ -128,6 +161,33 @@ def main(argv: list[str] | None = None) -> int:
         )
         write_evaluation_report(result, args.output)
         print(json.dumps(result.as_dict(), indent=2))
+        return 0
+    if args.cmd == 'prepare-forecast-dataset':
+        stats = prepare_forecast_dataset(args.windows, args.output_npz, args.output_meta, args.horizon_steps)
+        print(json.dumps(stats.as_dict(), indent=2))
+        return 0
+    if args.cmd == 'train-lstm-forecast':
+        result = train_lstm_forecast(
+            args.dataset,
+            args.output_dir,
+            args.epochs,
+            args.batch_size,
+            args.learning_rate,
+            args.hidden_size,
+            args.num_layers,
+            args.patience,
+            args.seed,
+            args.device,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'evaluate-lstm-forecast':
+        result = evaluate_lstm_forecast(args.dataset, args.model, args.output_dir, args.device)
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'predict-lstm-forecast':
+        output = predict_lstm_forecast(args.windows, args.model, args.output, args.max_windows, args.device)
+        print(output)
         return 0
     if args.cmd == 'check-config':
         load_config()
