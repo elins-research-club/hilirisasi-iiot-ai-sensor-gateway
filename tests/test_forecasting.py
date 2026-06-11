@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import tempfile
 import unittest
@@ -9,6 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
 from iiot_ai_sensor_gateway.features import FEATURE_NAMES
+
+HAS_NUMPY = importlib.util.find_spec('numpy') is not None
+HAS_TORCH = importlib.util.find_spec('torch') is not None
+HAS_ML_DEPS = HAS_NUMPY and HAS_TORCH
+
 from iiot_ai_sensor_gateway.forecasting import (
     TARGET_NAMES,
     build_lstm_forecaster,
@@ -46,6 +52,7 @@ def _write_windows(path: Path, nodes: int = 1, count: int = 18, timesteps: int =
     path.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
 
 
+@unittest.skipUnless(HAS_ML_DEPS, 'NumPy and PyTorch are optional ML dependencies')
 class ForecastingTests(unittest.TestCase):
     def test_prepare_forecast_dataset_shapes_and_targets(self):
         with tempfile.TemporaryDirectory() as temp_dir:
