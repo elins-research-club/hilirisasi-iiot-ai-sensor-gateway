@@ -17,6 +17,7 @@ ENV/
 .env
 data/raw/
 data/processed/
+data/processed*/
 data/modeling/
 data/logs/
 logs/

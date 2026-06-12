@@ -456,8 +456,7 @@ def train_lstm_forecast(
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.MSELoss()
     loader = DataLoader(TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train)), batch_size=batch_size, shuffle=True)
-    val_x = torch.from_numpy(X_val).to(resolved_device)
-    val_y = torch.from_numpy(y_val).to(resolved_device)
+    val_loader = DataLoader(TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val)), batch_size=batch_size, shuffle=False)
 
     best_loss = math.inf
     best_epoch = 0
@@ -476,8 +475,13 @@ def train_lstm_forecast(
             optimizer.step()
             losses.append(float(loss.detach().cpu().item()))
         model.eval()
+        val_losses: list[float] = []
         with torch.no_grad():
-            val_loss = float(criterion(model(val_x), val_y).detach().cpu().item())
+            for val_x, val_y in val_loader:
+                val_x = val_x.to(resolved_device)
+                val_y = val_y.to(resolved_device)
+                val_losses.append(float(criterion(model(val_x), val_y).detach().cpu().item()))
+            val_loss = float(sum(val_losses) / max(1, len(val_losses)))
         train_loss = float(sum(losses) / max(1, len(losses)))
         history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
         if val_loss < best_loss:
@@ -623,6 +627,7 @@ def evaluate_lstm_forecast(
     output_dir: str | Path | None = None,
     device: str = "auto",
     normalization_ranges: dict[str, tuple[float, float]] | None = None,
+    eval_batch_size: int = 1024,
 ) -> dict[str, Any]:
     np = _require_numpy()
     torch, _nn, _loader, _dataset = _require_torch()
@@ -652,11 +657,22 @@ def evaluate_lstm_forecast(
         "dataset_meta": dataset_meta,
         "splits": {},
     }
+    if eval_batch_size < 1:
+        raise ValueError("eval_batch_size must be a positive integer")
+
+    def predict_batches(x: Any) -> Any:
+        preds = []
+        with torch.no_grad():
+            for start in range(0, x.shape[0], eval_batch_size):
+                batch = torch.from_numpy(x[start:start + eval_batch_size]).to(resolved_device)
+                preds.append(model(batch).detach().cpu().numpy())
+        return np.concatenate(preds, axis=0) if preds else np.empty((0, len(target_names)), dtype=np.float32)
+
+    result["eval_batch_size"] = eval_batch_size
     for split in ("train", "val", "test"):
         x = data[f"X_{split}"].astype("float32")
         y = data[f"y_{split}"].astype("float32")
-        with torch.no_grad():
-            pred = model(torch.from_numpy(x).to(resolved_device)).detach().cpu().numpy()
+        pred = predict_batches(x)
         baseline = x[:, -1, target_indices]
         lstm_metrics = _regression_metrics(y, pred, target_names)
         baseline_metrics = _regression_metrics(y, baseline, target_names)
@@ -836,6 +852,7 @@ def run_forecast_experiments(
     resample_interval_sec: int = 60,
     normalization_ranges: dict[str, tuple[float, float]] | None = None,
     model_version: str = MODEL_VERSION,
+    eval_batch_size: int = 1024,
 ) -> list[dict[str, Any]]:
     output_path = Path(output_dir)
     runs_path = output_path / "runs"
@@ -876,7 +893,14 @@ def run_forecast_experiments(
                     device,
                     model_version,
                 )
-                metrics = evaluate_lstm_forecast(dataset_path, training["model_path"], run_dir, device, normalization_ranges)
+                metrics = evaluate_lstm_forecast(
+                    dataset_path,
+                    training["model_path"],
+                    run_dir,
+                    device,
+                    normalization_ranges,
+                    eval_batch_size,
+                )
                 summary.append(_experiment_row(run_id, stats, training, metrics, hidden_size))
                 _write_experiment_summary(output_path, summary)
     return summary

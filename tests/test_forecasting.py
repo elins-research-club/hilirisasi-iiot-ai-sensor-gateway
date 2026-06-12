@@ -124,8 +124,9 @@ class ForecastingTests(unittest.TestCase):
             )
             self.assertTrue(Path(train['model_path']).exists())
 
-            metrics = evaluate_lstm_forecast(dataset, train['model_path'], model_dir, device='cpu')
+            metrics = evaluate_lstm_forecast(dataset, train['model_path'], model_dir, device='cpu', eval_batch_size=5)
             self.assertEqual(metrics['status'], 'PASS')
+            self.assertEqual(metrics['eval_batch_size'], 5)
             self.assertEqual(metrics['data_status'], 'PASS')
             self.assertIn(metrics['baseline_comparison_status'], {'BEATS_BASELINE', 'UNDER_BASELINE', 'MIXED'})
             self.assertIn(metrics['model_readiness'], {'PROMISING', 'EXPERIMENTAL', 'NOT_READY'})
@@ -171,6 +172,7 @@ class ForecastingTests(unittest.TestCase):
                 patience=1,
                 device='cpu',
                 window_sizes=(4, 6),
+                eval_batch_size=5,
             )
 
             self.assertEqual(len(summary), 2)

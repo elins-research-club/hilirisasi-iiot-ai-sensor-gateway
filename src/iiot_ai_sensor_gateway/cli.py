@@ -57,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     derived.add_argument('--output-payloads', default='data/derived/gary_project_sensor_payloads.jsonl')
     derived.add_argument('--gateway-id', default='gary_project_schema')
     derived.add_argument('--room-id', default='gary_public')
+    derived.add_argument('--pressure-profile', choices=('smooth', 'dynamic'), default='smooth')
     gary_esp32 = sub.add_parser('simulate-gary-esp32', help='simulate ESP32-C6 preprocessing from Gary CSV into compact LoRa JSONL')
     gary_esp32.add_argument('--input-csv', default='iot_telemetry_data.csv')
     gary_esp32.add_argument('--output', default='data/simulated/gary_esp32_lora_payloads.jsonl')
@@ -96,6 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_forecast.add_argument('--model', default='models/lstm_forecast/latest/model.pt')
     eval_forecast.add_argument('--output-dir', default=None)
     eval_forecast.add_argument('--device', default='auto')
+    eval_forecast.add_argument('--eval-batch-size', type=int, default=1024)
     pred_forecast = sub.add_parser('predict-lstm-forecast', help='predict normalized sensor targets from windows')
     pred_forecast.add_argument('--config', default='config/default.toml')
     pred_forecast.add_argument('--windows', default='data/processed/lstm_windows.jsonl')
@@ -118,6 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
     experiments.add_argument('--seed', type=int, default=42)
     experiments.add_argument('--device', default='auto')
     experiments.add_argument('--model-version', default='lstm_forecast_v1')
+    experiments.add_argument('--eval-batch-size', type=int, default=1024)
     payload = sub.add_parser('build-forecast-payload-v1', help='build decision-layer-ready forecast payload JSONL')
     payload.add_argument('--predictions', default='models/lstm_forecast/latest/predictions.jsonl')
     payload.add_argument('--metrics', default='models/lstm_forecast/latest/metrics.json')
@@ -178,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             args.output_payloads,
             args.gateway_id,
             args.room_id,
+            args.pressure_profile,
         )
         print(json.dumps(stats.as_dict(), indent=2))
         return 0
@@ -229,7 +233,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == 'evaluate-lstm-forecast':
         config = load_config(args.config)
-        result = evaluate_lstm_forecast(args.dataset, args.model, args.output_dir, args.device, config.normalization_ranges)
+        result = evaluate_lstm_forecast(
+            args.dataset,
+            args.model,
+            args.output_dir,
+            args.device,
+            config.normalization_ranges,
+            args.eval_batch_size,
+        )
         print(json.dumps(result, indent=2))
         return 0
     if args.cmd == 'predict-lstm-forecast':
@@ -254,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
             load_config(args.config).pipeline.resample_interval_sec,
             load_config(args.config).normalization_ranges,
             args.model_version,
+            args.eval_batch_size,
         )
         print(json.dumps(result, indent=2))
         return 0

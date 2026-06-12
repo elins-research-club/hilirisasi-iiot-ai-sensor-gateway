@@ -84,7 +84,11 @@ timestamp,node_id,sequence,temperature_c,humidity_pct,pressure_hpa,bme_gas_raw,c
 
 Aturan derivasi:
 
-- `pressure_hpa` dibuat sebagai tren barometrik halus realistis sekitar 1008-1014 hPa.
+- `pressure_hpa` dibuat synthetic karena Gary tidak punya pressure asli. Mode
+  default `smooth` mempertahankan tren barometrik halus sekitar 1008-1014 hPa.
+  Untuk eksperimen model, mode `dynamic` dapat dipakai agar pressure punya
+  variasi cuaca/indoor/noise deterministik yang lebih realistis dan tidak
+  terlalu menguntungkan baseline last-value.
 - `bme_gas_raw` dibuat dari kombinasi LPG/smoke Gary, lalu diskalakan ke rentang 500-4500 agar cocok dengan normalisasi pipeline.
 - `light` dan `motion` dibuang dari schema utama.
 - Data turunan ini untuk belajar, simulasi pipeline, dan validasi bentuk data. Data real sensor tetap menjadi sumber kebenaran final.
@@ -136,4 +140,3 @@ File `data/processed/lstm_windows.jsonl` berisi satu sample per baris:
 - x, matrix [timesteps, features].
 
 Batch model tahap berikutnya membaca JSONL ini menjadi [samples, timesteps, features].
-

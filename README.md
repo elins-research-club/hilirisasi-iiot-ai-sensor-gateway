@@ -96,6 +96,14 @@ py -3.13 run_gateway.py run --input-file data/derived/gary_project_sensor_payloa
 py -3.13 run_gateway.py evaluate --canonical data/derived/gary_project_sensor_payloads.jsonl --windows data/processed/lstm_windows.jsonl --output data/evaluation/gary_project_schema_eval.json --input-source gary_derived_project_schema_payload --simulation-layer project_schema_derivation --gateway-layer raspberry_pi_pre_model_pipeline
 ```
 
+Untuk eksperimen model yang tidak terlalu menguntungkan baseline pressure,
+buat dataset turunan baru dengan pressure synthetic yang lebih dinamis. Jangan
+menimpa output lama; gunakan nama file baru:
+
+```powershell
+py -3.13 run_gateway.py derive-gary-schema --pressure-profile dynamic --input-csv iot_telemetry_data.csv --output-csv data/derived/gary_project_sensor_schema_dynamic.csv --output-jsonl data/derived/gary_project_sensor_schema_dynamic.jsonl --output-payloads data/derived/gary_project_sensor_payloads_dynamic.jsonl
+```
+
 Dataset turunan CSV berisi kolom:
 
 ```text
@@ -140,7 +148,7 @@ Siapkan dataset, train, evaluasi, dan prediksi:
 ```powershell
 py -3.13 run_gateway.py prepare-forecast-dataset --windows data/processed/lstm_windows.jsonl --output-npz data/modeling/lstm_forecast_dataset.npz --output-meta data/modeling/lstm_forecast_dataset_meta.json --horizon-steps 5
 py -3.13 run_gateway.py train-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --output-dir models/lstm_forecast/latest --epochs 30 --batch-size 64 --hidden-size 64 --device auto
-py -3.13 run_gateway.py evaluate-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --model models/lstm_forecast/latest/model.pt
+py -3.13 run_gateway.py evaluate-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --model models/lstm_forecast/latest/model.pt --eval-batch-size 1024
 py -3.13 run_gateway.py predict-lstm-forecast --windows data/processed/lstm_windows.jsonl --model models/lstm_forecast/latest/model.pt --output models/lstm_forecast/latest/predictions.jsonl --max-windows 10
 py -3.13 run_gateway.py build-forecast-payload-v1 --predictions models/lstm_forecast/latest/predictions.jsonl --metrics models/lstm_forecast/latest/metrics.json --output models/lstm_forecast/latest/forecast_payloads.jsonl
 ```
@@ -148,8 +156,10 @@ py -3.13 run_gateway.py build-forecast-payload-v1 --predictions models/lstm_fore
 Untuk membandingkan beberapa horizon dan ukuran LSTM sekaligus:
 
 ```powershell
-py -3.13 run_gateway.py run-forecast-experiments --windows data/processed/lstm_windows.jsonl --output-dir models/forecast_experiments/latest --horizons 5,15,30 --window-sizes 12,24,36 --hidden-sizes 32,64 --epochs 30 --batch-size 64 --device auto
+py -3.13 run_gateway.py run-forecast-experiments --windows data/processed/lstm_windows.jsonl --output-dir models/forecast_experiments/latest --horizons 5,15,30 --window-sizes 12,24,36 --hidden-sizes 32,64 --epochs 30 --batch-size 64 --device auto --eval-batch-size 1024
 ```
+
+Untuk eksperimen CUDA, gunakan `--device cuda`; jika VRAM penuh saat evaluasi, turunkan `--eval-batch-size`.
 
 Output model dan dataset training berada di `data/modeling/` dan `models/`, lalu
 di-ignore dari Git. Detail ada di `docs/lstm-forecasting.md`.

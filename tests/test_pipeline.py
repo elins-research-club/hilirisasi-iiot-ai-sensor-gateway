@@ -155,6 +155,7 @@ class PipelineTests(unittest.TestCase):
             derived_payloads = temp / 'payloads.jsonl'
             stats = derive_gary_project_schema(csv_path, derived_csv, derived_jsonl, derived_payloads)
             self.assertEqual(stats.written_rows, 15)
+            self.assertEqual(stats.pressure_profile, 'smooth')
             header = derived_csv.read_text(encoding='utf-8').splitlines()[0]
             self.assertEqual(header, 'timestamp,node_id,sequence,temperature_c,humidity_pct,pressure_hpa,bme_gas_raw,co_raw')
             with derived_csv.open(newline='', encoding='utf-8') as file:
@@ -183,6 +184,33 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(result.lstm_readiness, 'READY')
             self.assertEqual(result.shape, (4, config.pipeline.window_size, len(FEATURE_NAMES)))
 
+    def test_gary_project_schema_dynamic_pressure_profile(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            csv_path = temp / 'gary.csv'
+            with csv_path.open('w', newline='', encoding='utf-8') as file:
+                writer = csv.DictWriter(file, fieldnames=['ts', 'device', 'co', 'humidity', 'light', 'lpg', 'motion', 'smoke', 'temp'])
+                writer.writeheader()
+                for idx in range(90):
+                    writer.writerow({'ts': 1594512094 + idx * 60, 'device': 'dev1', 'co': 0.004 + idx * 0.00002, 'humidity': 58 + idx * 0.03, 'light': 'false', 'lpg': 0.006 + idx * 0.00002, 'motion': 'false', 'smoke': 0.018 + idx * 0.00004, 'temp': 24 + idx * 0.02})
+
+            smooth_csv = temp / 'smooth.csv'
+            dynamic_csv = temp / 'dynamic.csv'
+            smooth_stats = derive_gary_project_schema(csv_path, smooth_csv, temp / 'smooth.jsonl', temp / 'smooth_payloads.jsonl')
+            dynamic_stats = derive_gary_project_schema(
+                csv_path,
+                dynamic_csv,
+                temp / 'dynamic.jsonl',
+                temp / 'dynamic_payloads.jsonl',
+                pressure_profile='dynamic',
+            )
+
+            self.assertEqual(dynamic_stats.pressure_profile, 'dynamic')
+            self.assertGreater(dynamic_stats.pressure_max_hpa - dynamic_stats.pressure_min_hpa, smooth_stats.pressure_max_hpa - smooth_stats.pressure_min_hpa)
+            with dynamic_csv.open(newline='', encoding='utf-8') as file:
+                rows = list(csv.DictReader(file))
+            self.assertIn('pressure_hpa', rows[0])
+            self.assertGreater(float(rows[0]['pressure_hpa']), 1000.0)
+
 if __name__ == '__main__':
     unittest.main()
-

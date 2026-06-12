@@ -94,7 +94,7 @@ py -3.13 run_gateway.py train-lstm-forecast --dataset data/modeling/lstm_forecas
 Evaluasi model:
 
 ```powershell
-py -3.13 run_gateway.py evaluate-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --model models/lstm_forecast/latest/model.pt
+py -3.13 run_gateway.py evaluate-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --model models/lstm_forecast/latest/model.pt --eval-batch-size 1024
 ```
 
 Prediksi dari window:
@@ -112,8 +112,11 @@ py -3.13 run_gateway.py build-forecast-payload-v1 --predictions models/lstm_fore
 Jalankan beberapa eksperimen sekaligus:
 
 ```powershell
-py -3.13 run_gateway.py run-forecast-experiments --windows data/processed/lstm_windows.jsonl --output-dir models/forecast_experiments/latest --horizons 5,15,30 --window-sizes 12,24,36 --hidden-sizes 32,64 --epochs 30 --batch-size 64 --device auto
+py -3.13 run_gateway.py run-forecast-experiments --windows data/processed/lstm_windows.jsonl --output-dir models/forecast_experiments/latest --horizons 5,15,30 --window-sizes 12,24,36 --hidden-sizes 32,64 --epochs 30 --batch-size 64 --device auto --eval-batch-size 1024
 ```
+
+Untuk GPU CUDA dengan VRAM terbatas, `--eval-batch-size` penting karena training sudah berjalan per batch, tetapi evaluasi juga harus diproses bertahap agar tidak memindahkan seluruh split dataset ke GPU sekaligus. Jika masih terjadi CUDA out-of-memory, turunkan nilai ini, misalnya `512` atau `256`.
+Di Windows/WDDM, tidak perlu mengatur `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` karena opsi itu dapat memunculkan warning PyTorch dan tidak diperlukan setelah evaluasi dibuat batch-based.
 
 ## Output Lokal
 

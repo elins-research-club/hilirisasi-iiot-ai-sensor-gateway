@@ -32,6 +32,7 @@ class GaryProjectSchemaStats:
     pressure_max_hpa: float | None
     bme_gas_min: float | None
     bme_gas_max: float | None
+    pressure_profile: str
     output_csv: str
     output_jsonl: str
     output_payloads: str
@@ -71,6 +72,52 @@ def _synthetic_pressure(ts: datetime, node_id: str, temperature_c: float, humidi
     return round(min(1016.0, max(1006.0, pressure)), 2)
 
 
+def _deterministic_noise(node_id: str, sequence: int) -> float:
+    seed = (sum(ord(char) for char in node_id) * 31) + (sequence * 17)
+    return (((seed * 1103515245 + 12345) % 10_000) / 10_000.0) - 0.5
+
+
+def _synthetic_pressure_dynamic(
+    ts: datetime,
+    node_id: str,
+    sequence: int,
+    temperature_c: float,
+    humidity_pct: float,
+    co_raw: float,
+    gas_base: float,
+) -> float:
+    day = ts.timestamp() / 86_400.0
+    hour = ts.timestamp() / 3_600.0
+    phase = _node_phase(node_id)
+    node_offset = ((sum(ord(char) for char in node_id) % 17) - 8) * 0.035
+    weather_front = 3.2 * math.sin((2.0 * math.pi * day / 2.4) + phase)
+    daily_tide = 0.85 * math.sin((2.0 * math.pi * day) + (phase / 3.0))
+    indoor_cycle = 0.22 * math.sin((2.0 * math.pi * hour / 5.5) + phase)
+    ventilation_cycle = 0.55 * math.sin((2.0 * math.pi * hour / 1.4) + (phase / 4.0))
+    env_coupling = ((temperature_c - 24.0) * -0.035) + ((humidity_pct - 55.0) * 0.012)
+    gas_coupling = min(0.42, max(-0.42, ((gas_base - 0.01) * 7.5) + (co_raw * 4.0)))
+    sensor_noise = _deterministic_noise(node_id, sequence) * 0.18
+    pressure = 1011.4 + node_offset + weather_front + daily_tide + indoor_cycle + ventilation_cycle + env_coupling + gas_coupling + sensor_noise
+    return round(min(1020.0, max(1002.0, pressure)), 2)
+
+
+def _pressure_value(
+    profile: str,
+    ts: datetime,
+    node_id: str,
+    sequence: int,
+    temperature_c: float,
+    humidity_pct: float,
+    co_raw: float,
+    gas_base: float,
+) -> float:
+    if profile == "smooth":
+        return _synthetic_pressure(ts, node_id, temperature_c, humidity_pct)
+    if profile == "dynamic":
+        return _synthetic_pressure_dynamic(ts, node_id, sequence, temperature_c, humidity_pct, co_raw, gas_base)
+    raise ValueError(f"unsupported pressure profile: {profile}")
+
+
 def _scaled_bme_gas(gas_base: float, gas_min: float, gas_max: float) -> float:
     if gas_max <= gas_min:
         return 1500.0
@@ -98,6 +145,7 @@ def derive_gary_project_schema(
     output_payloads: str | Path = "data/derived/gary_project_sensor_payloads.jsonl",
     gateway_id: str = "gary_project_schema",
     room_id: str = "gary_public",
+    pressure_profile: str = "smooth",
 ) -> GaryProjectSchemaStats:
     input_path = Path(input_csv)
     csv_path = Path(output_csv)
@@ -137,7 +185,16 @@ def derive_gary_project_schema(
                 gas_base = _avg_present(_to_float(row.get("lpg")), _to_float(row.get("smoke")))
                 if gas_base is None:
                     raise ValueError("missing gas proxy source")
-                pressure_hpa = _synthetic_pressure(ts, node_id, temperature_c, humidity_pct)
+                pressure_hpa = _pressure_value(
+                    pressure_profile,
+                    ts,
+                    node_id,
+                    sequence,
+                    temperature_c,
+                    humidity_pct,
+                    co_raw,
+                    gas_base,
+                )
                 bme_gas_raw = _scaled_bme_gas(gas_base, gas_min, gas_max)
 
                 csv_record = {
@@ -170,7 +227,8 @@ def derive_gary_project_schema(
                         "source_dataset": "gary_stafford_iot_telemetry",
                         "schema": "project_sensor_schema_derived",
                         "notes": [
-                            "pressure_hpa is synthetic smooth barometric trend",
+                            "pressure_hpa is synthetic because Gary has no native pressure column",
+                            f"pressure_profile={pressure_profile}",
                             "bme_gas_raw is scaled from Gary lpg/smoke gas-like columns",
                         ],
                     },
@@ -216,6 +274,7 @@ def derive_gary_project_schema(
         max(pressure_values) if pressure_values else None,
         min(bme_values) if bme_values else None,
         max(bme_values) if bme_values else None,
+        pressure_profile,
         str(csv_path),
         str(jsonl_path),
         str(payload_path),
