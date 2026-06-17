@@ -17,6 +17,7 @@ from .forecasting import (
     predict_lstm_forecast,
     prepare_forecast_dataset,
     run_forecast_experiments,
+    select_best_forecast_model,
     train_lstm_forecast,
 )
 from .normalization import MinMaxNormalizer
@@ -126,6 +127,18 @@ def build_parser() -> argparse.ArgumentParser:
     payload.add_argument('--metrics', default='models/lstm_forecast/latest/metrics.json')
     payload.add_argument('--output', default='models/lstm_forecast/latest/forecast_payloads.jsonl')
     payload.add_argument('--metrics-ref', default=None)
+    selector = sub.add_parser('select-best-forecast-model', help='select a forecast model candidate from experiment summary.csv')
+    selector.add_argument('--summary', default='models/forecast_experiments/latest/summary.csv')
+    selector.add_argument('--output', default='models/forecast_experiments/latest/best_model_selection.json')
+    selector.add_argument('--top-k', type=int, default=5)
+    selector.add_argument('--gas-weight', type=float, default=0.25)
+    selector.add_argument('--co-weight', type=float, default=0.25)
+    selector.add_argument('--temperature-weight', type=float, default=0.15)
+    selector.add_argument('--humidity-weight', type=float, default=0.15)
+    selector.add_argument('--pressure-weight', type=float, default=0.10)
+    selector.add_argument('--overall-weight', type=float, default=0.10)
+    selector.add_argument('--require-data-status', default='PASS')
+    selector.add_argument('--no-prefer-readiness', action='store_true')
     sub.add_parser('check-config', help='load config and exit')
     return parser
 
@@ -272,6 +285,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == 'build-forecast-payload-v1':
         output = build_forecast_payload_v1(args.predictions, args.metrics, args.output, args.metrics_ref)
         print(output)
+        return 0
+    if args.cmd == 'select-best-forecast-model':
+        result = select_best_forecast_model(
+            args.summary,
+            args.output,
+            args.top_k,
+            args.gas_weight,
+            args.co_weight,
+            args.temperature_weight,
+            args.humidity_weight,
+            args.pressure_weight,
+            args.overall_weight,
+            args.require_data_status,
+            not args.no_prefer_readiness,
+        )
+        print(json.dumps(result, indent=2))
         return 0
     if args.cmd == 'check-config':
         load_config()

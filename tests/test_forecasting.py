@@ -23,6 +23,7 @@ from iiot_ai_sensor_gateway.forecasting import (
     predict_lstm_forecast,
     prepare_forecast_dataset,
     run_forecast_experiments,
+    select_best_forecast_model,
     train_lstm_forecast,
 )
 
@@ -52,6 +53,69 @@ def _write_windows(path: Path, nodes: int = 1, count: int = 18, timesteps: int =
                 'x': x,
             })
     path.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+
+
+def _write_summary_csv(path: Path) -> None:
+    header = [
+        'run_id', 'horizon_steps', 'forecast_horizon_minutes', 'window_size', 'hidden_size', 'epochs_ran',
+        'data_status', 'baseline_comparison_status', 'model_readiness', 'test_samples', 'test_lstm_rmse',
+        'test_baseline_rmse', 'test_rmse_skill_score', 'run_dir',
+    ]
+    for target in TARGET_NAMES:
+        header.extend([
+            f'{target}_rmse', f'{target}_baseline_rmse', f'{target}_skill_score',
+            f'{target}_denorm_rmse', f'{target}_baseline_denorm_rmse',
+        ])
+    rows = [
+        {
+            'run_id': 'w12_h5_hidden64', 'horizon_steps': '5', 'forecast_horizon_minutes': '5',
+            'window_size': '12', 'hidden_size': '64', 'epochs_ran': '30', 'data_status': 'PASS',
+            'baseline_comparison_status': 'UNDER_BASELINE', 'model_readiness': 'EXPERIMENTAL',
+            'test_samples': '20', 'test_lstm_rmse': '0.010', 'test_baseline_rmse': '0.006',
+            'test_rmse_skill_score': '-0.66', 'run_dir': 'runs/w12_h5_hidden64',
+        },
+        {
+            'run_id': 'w24_h5_hidden128', 'horizon_steps': '5', 'forecast_horizon_minutes': '5',
+            'window_size': '24', 'hidden_size': '128', 'epochs_ran': '30', 'data_status': 'PASS',
+            'baseline_comparison_status': 'MIXED', 'model_readiness': 'EXPERIMENTAL',
+            'test_samples': '20', 'test_lstm_rmse': '0.0045', 'test_baseline_rmse': '0.0037',
+            'test_rmse_skill_score': '-0.19', 'run_dir': 'runs/w24_h5_hidden128',
+        },
+    ]
+    skills = {
+        'w12_h5_hidden64': [-0.20, -0.30, -0.90, -0.10, -0.45],
+        'w24_h5_hidden128': [-0.05, 0.04, -0.70, -0.20, -0.31],
+    }
+    for row in rows:
+        for target, skill in zip(TARGET_NAMES, skills[row['run_id']], strict=True):
+            row[f'{target}_rmse'] = '0.01'
+            row[f'{target}_baseline_rmse'] = '0.008'
+            row[f'{target}_skill_score'] = str(skill)
+            row[f'{target}_denorm_rmse'] = '1.0'
+            row[f'{target}_baseline_denorm_rmse'] = '0.8'
+    import csv
+    with path.open('w', encoding='utf-8', newline='') as file:
+        writer = csv.DictWriter(file, fieldnames=header)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+class ForecastModelSelectionTests(unittest.TestCase):
+    def test_select_best_forecast_model_outputs_candidate(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            summary = temp / 'summary.csv'
+            output = temp / 'best_model_selection.json'
+            _write_summary_csv(summary)
+
+            result = select_best_forecast_model(summary, output, top_k=2)
+
+            self.assertTrue(output.exists())
+            self.assertEqual(result['schema'], 'iiot.ai_sensor.forecast_model_selection.v1')
+            self.assertEqual(result['selected_run']['run_id'], 'w24_h5_hidden128')
+            self.assertEqual(result['candidate_status'], 'NEEDS_TUNING')
+            self.assertEqual(len(result['top_runs']), 2)
+            self.assertIn('target_notes', result)
 
 
 @unittest.skipUnless(HAS_ML_DEPS, 'NumPy and PyTorch are optional ML dependencies')

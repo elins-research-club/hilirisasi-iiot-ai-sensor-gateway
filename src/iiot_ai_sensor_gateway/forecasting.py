@@ -15,6 +15,15 @@ from .normalization import DEFAULT_RANGES
 
 TARGET_NAMES = ("temperature_c", "humidity_pct", "pressure_hpa", "bme_gas_raw", "co_raw")
 MODEL_VERSION = "lstm_forecast_v1"
+SELECTION_SCHEMA = "iiot.ai_sensor.forecast_model_selection.v1"
+DEFAULT_SELECTION_WEIGHTS = {
+    "co_raw": 0.25,
+    "bme_gas_raw": 0.25,
+    "temperature_c": 0.15,
+    "humidity_pct": 0.15,
+    "pressure_hpa": 0.10,
+    "overall": 0.10,
+}
 
 
 def _require_numpy():
@@ -803,6 +812,155 @@ def _write_experiment_summary(output_dir: Path, rows: list[dict[str, Any]]) -> N
         writer = csv.DictWriter(file, fieldnames=_summary_columns(rows), extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _bounded_skill(value: float) -> float:
+    return max(-1.0, min(1.0, value))
+
+
+def _selection_score(row: dict[str, Any], weights: dict[str, float], prefer_readiness: bool) -> float:
+    score = weights["overall"] * _bounded_skill(_safe_float(row.get("test_rmse_skill_score")))
+    for target in TARGET_NAMES:
+        score += weights[target] * _bounded_skill(_safe_float(row.get(f"{target}_skill_score")))
+    status = row.get("baseline_comparison_status")
+    if status == "BEATS_BASELINE":
+        score += 0.10
+    elif status == "MIXED":
+        score += 0.03
+    elif status == "UNDER_BASELINE":
+        score -= 0.05
+    if prefer_readiness and row.get("model_readiness") == "PROMISING":
+        score += 0.05
+    return float(score)
+
+
+def _selection_row(row: dict[str, Any], score: float) -> dict[str, Any]:
+    targets = {
+        target: {
+            "skill_score": _safe_float(row.get(f"{target}_skill_score")),
+            "rmse": _safe_float(row.get(f"{target}_rmse")),
+            "baseline_rmse": _safe_float(row.get(f"{target}_baseline_rmse")),
+            "denorm_rmse": _safe_float(row.get(f"{target}_denorm_rmse")),
+            "baseline_denorm_rmse": _safe_float(row.get(f"{target}_baseline_denorm_rmse")),
+        }
+        for target in TARGET_NAMES
+    }
+    return {
+        "run_id": row.get("run_id"),
+        "run_dir": row.get("run_dir"),
+        "horizon_steps": int(_safe_float(row.get("horizon_steps"))),
+        "forecast_horizon_minutes": _safe_float(row.get("forecast_horizon_minutes")),
+        "window_size": int(_safe_float(row.get("window_size"))),
+        "hidden_size": int(_safe_float(row.get("hidden_size"))),
+        "epochs_ran": int(_safe_float(row.get("epochs_ran"))),
+        "data_status": row.get("data_status"),
+        "baseline_comparison_status": row.get("baseline_comparison_status"),
+        "model_readiness": row.get("model_readiness"),
+        "test_lstm_rmse": _safe_float(row.get("test_lstm_rmse")),
+        "test_baseline_rmse": _safe_float(row.get("test_baseline_rmse")),
+        "test_rmse_skill_score": _safe_float(row.get("test_rmse_skill_score")),
+        "selection_score": score,
+        "target_metrics": targets,
+    }
+
+
+def _target_notes(row: dict[str, Any]) -> dict[str, Any]:
+    skills = {target: _safe_float(row.get(f"{target}_skill_score")) for target in TARGET_NAMES}
+    strongest = max(skills, key=skills.get)
+    weakest = min(skills, key=skills.get)
+    return {
+        "strongest_target": {"name": strongest, "skill_score": skills[strongest]},
+        "weakest_target": {"name": weakest, "skill_score": skills[weakest]},
+        "pressure_note": "pressure_hpa in Gary derived workflow is synthetic and should not be treated as real BME688 pressure validation",
+        "air_quality_note": "co_raw and bme_gas_raw remain important for environmental risk, but all target sensors are included in selection",
+    }
+
+
+def select_best_forecast_model(
+    summary_csv: str | Path,
+    output_json: str | Path,
+    top_k: int = 5,
+    gas_weight: float = 0.25,
+    co_weight: float = 0.25,
+    temperature_weight: float = 0.15,
+    humidity_weight: float = 0.15,
+    pressure_weight: float = 0.10,
+    overall_weight: float = 0.10,
+    require_data_status: str = "PASS",
+    prefer_readiness: bool = True,
+) -> dict[str, Any]:
+    summary_path = Path(summary_csv)
+    with summary_path.open(encoding="utf-8", newline="") as file:
+        rows = list(csv.DictReader(file))
+    if not rows:
+        raise ValueError(f"no experiment rows found in {summary_csv}")
+    candidates = [row for row in rows if row.get("data_status") == require_data_status]
+    if not candidates:
+        raise ValueError(f"no rows with data_status={require_data_status}")
+    weights = {
+        **DEFAULT_SELECTION_WEIGHTS,
+        "co_raw": co_weight,
+        "bme_gas_raw": gas_weight,
+        "temperature_c": temperature_weight,
+        "humidity_pct": humidity_weight,
+        "pressure_hpa": pressure_weight,
+        "overall": overall_weight,
+    }
+    scored = [(row, _selection_score(row, weights, prefer_readiness)) for row in candidates]
+    critical_scores_positive = any(
+        _safe_float(row.get("test_rmse_skill_score")) > 0
+        or _safe_float(row.get("co_raw_skill_score")) > 0
+        or _safe_float(row.get("bme_gas_raw_skill_score")) > 0
+        for row, _score in scored
+    )
+    if critical_scores_positive:
+        selected_row, selected_score = max(scored, key=lambda item: item[1])
+        selection_reason = "selected by weighted skill score across all target sensors"
+    else:
+        selected_row, selected_score = min(scored, key=lambda item: _safe_float(item[0].get("test_lstm_rmse"), math.inf))
+        selection_reason = "all critical skill scores are below baseline; selected lowest normalized LSTM RMSE as tuning candidate"
+    if selected_row.get("data_status") != "PASS":
+        candidate_status = "NOT_READY"
+    elif selected_row.get("baseline_comparison_status") == "BEATS_BASELINE" and selected_score > 0:
+        candidate_status = "PROMISING"
+    else:
+        candidate_status = "NEEDS_TUNING"
+    top_rows = sorted(scored, key=lambda item: item[1], reverse=True)[:top_k]
+    result = {
+        "schema": SELECTION_SCHEMA,
+        "created_at": _utc_now(),
+        "source_summary": str(summary_path),
+        "candidate_status": candidate_status,
+        "selection_reason": selection_reason,
+        "ranking_criteria": {
+            "weights": weights,
+            "require_data_status": require_data_status,
+            "prefer_readiness": prefer_readiness,
+            "status_adjustments": {
+                "BEATS_BASELINE": 0.10,
+                "MIXED": 0.03,
+                "UNDER_BASELINE": -0.05,
+                "PROMISING_READINESS": 0.05,
+            },
+            "fallback": "lowest test_lstm_rmse when overall/co_raw/bme_gas_raw skill scores are all below baseline",
+        },
+        "selected_run": _selection_row(selected_row, selected_score),
+        "top_runs": [_selection_row(row, score) for row, score in top_rows],
+        "target_notes": _target_notes(selected_row),
+    }
+    output_path = Path(output_json)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
+    return result
 
 
 def _experiment_row(run_id: str, stats: ForecastDatasetStats, training: dict[str, Any], metrics: dict[str, Any], hidden_size: int) -> dict[str, Any]:
