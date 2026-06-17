@@ -54,6 +54,36 @@ Non-scope repo ini:
 - BME688/BME668: temperature, humidity, pressure, dan BME gas raw/gas resistance style signal.
 - SEN0377: CO/gas tambahan.
 
+## Simulation, Real Offline File, and Real Live Pipeline
+
+Repo ini memisahkan tiga jalur data:
+
+- Simulation/reference pipeline: dataset publik atau dummy dipakai untuk proof of
+  concept, eksperimen preprocessing, forecasting, evaluator, model selector, dan
+  decision layer awal. Workflow Gary berada di jalur ini.
+- Real offline file pipeline: data mentah dari ESP32-C6/Raspberry Pi disimpan
+  dulu sebagai file raw JSONL/CSV, lalu diproses untuk training, evaluation, dan
+  model selection. Jalur ini adalah cara paling aman untuk memakai data sensor
+  sendiri sebelum receiver live matang.
+- Real live receiver pipeline: Raspberry Pi membaca payload dari LoRa/serial
+  untuk inference dan decision lokal. Receiver live penuh belum diimplementasikan
+  dan menjadi handoff integrasi hardware.
+
+Semua jalur harus bertemu di canonical schema sebelum memakai shared core logic:
+
+```text
+simulation adapter     -> canonical schema
+real file adapter      -> canonical schema
+real stream receiver   -> canonical schema
+canonical schema       -> preprocessing -> windowing -> model/decision
+```
+
+Data/model/artifact simulasi dan real harus tetap dipisah. `data/`, `models/`,
+`*.pt`, dan `*.npz` tetap ignored dari Git. Detail boundary ada di
+`docs/data-source-boundary.md`, `docs/shared-canonical-schema.md`,
+`docs/real-offline-file-pipeline.md`, `docs/real-live-receiver-pipeline.md`, dan
+`docs/real-receiver-contract.md`.
+
 ## Folder Utama
 
 ```text
@@ -192,6 +222,12 @@ py -3.13 -m unittest discover -s tests -p 'test_*.py' -q
 - `docs/lstm-forecasting.md`
 - `docs/progress-lstm-forecasting-v1.md`
 - `docs/forecast-decision-layer.md`
+- `docs/data-source-boundary.md`
+- `docs/shared-canonical-schema.md`
+- `docs/simulation-reference-pipeline.md`
+- `docs/real-offline-file-pipeline.md`
+- `docs/real-live-receiver-pipeline.md`
+- `docs/real-receiver-contract.md`
 - `docs/data-contract.md`
 - `docs/progress-gary-derived-project-schema.md`
 - `docs/progress-gary-stafford-preprocessing.md`
