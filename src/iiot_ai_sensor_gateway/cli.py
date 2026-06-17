@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -23,6 +24,8 @@ from .forecasting import (
 )
 from .normalization import MinMaxNormalizer
 from .parser import PayloadParser
+from .real import FileReplaySource, LiveReceiver, SerialLineSource
+from .real.serial_source import SerialDependencyError
 from .resampling import resample
 from .simulator import SCENARIOS, write_simulation
 from .validation import ReadingValidator
@@ -143,6 +146,15 @@ def build_parser() -> argparse.ArgumentParser:
     selector.add_argument('--overall-weight', type=float, default=0.10)
     selector.add_argument('--require-data-status', default='PASS')
     selector.add_argument('--no-prefer-readiness', action='store_true')
+    receiver = sub.add_parser('receive-real-live', help='receive real live LoRa/serial JSONL payloads or replay file')
+    receiver.add_argument('--config', default='config/default.toml')
+    receiver_source = receiver.add_mutually_exclusive_group(required=True)
+    receiver_source.add_argument('--replay-file', default=None)
+    receiver_source.add_argument('--port', default=None)
+    receiver.add_argument('--baudrate', type=int, default=9600)
+    receiver.add_argument('--timeout', type=float, default=1.0)
+    receiver.add_argument('--max-messages', type=int, default=0)
+    receiver.add_argument('--output-dir', default='data/real_live_logs')
     sub.add_parser('check-config', help='load config and exit')
     return parser
 
@@ -309,6 +321,22 @@ def main(argv: list[str] | None = None) -> int:
             not args.no_prefer_readiness,
         )
         print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'receive-real-live':
+        config = load_config(args.config)
+        payload_parser = PayloadParser(config.identity.gateway_id, config.identity.default_room_id)
+        validator = ReadingValidator(config.validation_ranges, config.pipeline.sequence_gap_warn)
+        source = (
+            FileReplaySource(args.replay_file)
+            if args.replay_file
+            else SerialLineSource(args.port, args.baudrate, args.timeout)
+        )
+        try:
+            summary = LiveReceiver(payload_parser, validator).run(source, args.output_dir, args.max_messages)
+        except SerialDependencyError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(json.dumps(summary.as_dict(), indent=2))
         return 0
     if args.cmd == 'check-config':
         load_config()

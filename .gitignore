@@ -16,6 +16,9 @@ ENV/
 # Local config and runtime data
 .env
 data/raw/
+data/real_raw/
+data/real_canonical/
+data/real_live_logs/
 data/processed/
 data/processed*/
 data/modeling/
