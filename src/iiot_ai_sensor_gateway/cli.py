@@ -12,6 +12,7 @@ from .evaluation import evaluate_preprocessing, write_evaluation_report
 from .esp32_sim import simulate_gary_esp32_payloads
 from .features import extract_features
 from .forecasting import (
+    build_forecast_decision_v1,
     build_forecast_payload_v1,
     evaluate_lstm_forecast,
     predict_lstm_forecast,
@@ -127,6 +128,9 @@ def build_parser() -> argparse.ArgumentParser:
     payload.add_argument('--metrics', default='models/lstm_forecast/latest/metrics.json')
     payload.add_argument('--output', default='models/lstm_forecast/latest/forecast_payloads.jsonl')
     payload.add_argument('--metrics-ref', default=None)
+    decision = sub.add_parser('build-forecast-decision-v1', help='build local rule-based forecast decision JSONL')
+    decision.add_argument('--forecast-payloads', default='models/lstm_forecast/latest/forecast_payloads.jsonl')
+    decision.add_argument('--output', default='models/lstm_forecast/latest/decision_payloads.jsonl')
     selector = sub.add_parser('select-best-forecast-model', help='select a forecast model candidate from experiment summary.csv')
     selector.add_argument('--summary', default='models/forecast_experiments/latest/summary.csv')
     selector.add_argument('--output', default='models/forecast_experiments/latest/best_model_selection.json')
@@ -284,6 +288,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == 'build-forecast-payload-v1':
         output = build_forecast_payload_v1(args.predictions, args.metrics, args.output, args.metrics_ref)
+        print(output)
+        return 0
+    if args.cmd == 'build-forecast-decision-v1':
+        output = build_forecast_decision_v1(args.forecast_payloads, args.output)
         print(output)
         return 0
     if args.cmd == 'select-best-forecast-model':

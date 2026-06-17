@@ -16,6 +16,7 @@ from .normalization import DEFAULT_RANGES
 TARGET_NAMES = ("temperature_c", "humidity_pct", "pressure_hpa", "bme_gas_raw", "co_raw")
 MODEL_VERSION = "lstm_forecast_v1"
 SELECTION_SCHEMA = "iiot.ai_sensor.forecast_model_selection.v1"
+FORECAST_DECISION_SCHEMA = "iiot.ai_sensor.forecast_decision.v1"
 DEFAULT_SELECTION_WEIGHTS = {
     "co_raw": 0.25,
     "bme_gas_raw": 0.25,
@@ -23,6 +24,15 @@ DEFAULT_SELECTION_WEIGHTS = {
     "humidity_pct": 0.15,
     "pressure_hpa": 0.10,
     "overall": 0.10,
+}
+SEVERITY_RANK = {"normal": 0, "warning": 1, "critical": 2}
+DECISION_FACTOR_PRIORITY = {
+    "co_raw": 0,
+    "bme_gas_raw": 1,
+    "temperature_c": 2,
+    "humidity_pct": 3,
+    "pressure_hpa": 4,
+    "model_readiness": 5,
 }
 
 
@@ -1093,6 +1103,97 @@ def build_forecast_payload_v1(
                 "model_version": prediction.get("model_version") or metrics.get("model_version", MODEL_VERSION),
                 "metrics_ref": ref,
                 "model_readiness": metrics.get("model_readiness", "EXPERIMENTAL"),
+            }
+            dst.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    return output_path
+
+
+def _decision_rule(severity: str, factor: str, reason: str) -> dict[str, str]:
+    return {"severity": severity, "factor": factor, "reason": reason}
+
+
+def _pick_decision(rules: list[dict[str, str]]) -> dict[str, str]:
+    if not rules:
+        return _decision_rule("normal", "model_readiness", "all forecast values are inside v1 rule thresholds")
+    return min(
+        rules,
+        key=lambda item: (
+            -SEVERITY_RANK[item["severity"]],
+            DECISION_FACTOR_PRIORITY[item["factor"]],
+        ),
+    )
+
+
+def _forecast_decision(predicted_sensor: dict[str, Any], model_readiness: str) -> dict[str, str]:
+    rules: list[dict[str, str]] = []
+    if model_readiness == "NOT_READY":
+        rules.append(_decision_rule("warning", "model_readiness", "model_readiness is NOT_READY"))
+    co_raw = _safe_float(predicted_sensor.get("co_raw"), math.nan)
+    bme_gas_raw = _safe_float(predicted_sensor.get("bme_gas_raw"), math.nan)
+    temperature_c = _safe_float(predicted_sensor.get("temperature_c"), math.nan)
+    humidity_pct = _safe_float(predicted_sensor.get("humidity_pct"), math.nan)
+    pressure_hpa = _safe_float(predicted_sensor.get("pressure_hpa"), math.nan)
+    if math.isfinite(co_raw):
+        if co_raw >= 0.08:
+            rules.append(_decision_rule("critical", "co_raw", "co_raw forecast exceeded critical threshold"))
+        elif co_raw >= 0.04:
+            rules.append(_decision_rule("warning", "co_raw", "co_raw forecast exceeded warning threshold"))
+    if math.isfinite(bme_gas_raw):
+        if bme_gas_raw >= 3500:
+            rules.append(_decision_rule("critical", "bme_gas_raw", "bme_gas_raw forecast exceeded critical threshold"))
+        elif bme_gas_raw >= 2500:
+            rules.append(_decision_rule("warning", "bme_gas_raw", "bme_gas_raw forecast exceeded warning threshold"))
+    if math.isfinite(temperature_c):
+        if temperature_c >= 38:
+            rules.append(_decision_rule("critical", "temperature_c", "temperature_c forecast exceeded critical threshold"))
+        elif temperature_c >= 35:
+            rules.append(_decision_rule("warning", "temperature_c", "temperature_c forecast exceeded warning threshold"))
+        elif temperature_c <= 10:
+            rules.append(_decision_rule("warning", "temperature_c", "temperature_c forecast is below low warning threshold"))
+    if math.isfinite(humidity_pct):
+        if humidity_pct >= 90:
+            rules.append(_decision_rule("critical", "humidity_pct", "humidity_pct forecast exceeded critical threshold"))
+        elif humidity_pct >= 85:
+            rules.append(_decision_rule("warning", "humidity_pct", "humidity_pct forecast exceeded warning threshold"))
+        elif humidity_pct <= 25:
+            rules.append(_decision_rule("warning", "humidity_pct", "humidity_pct forecast is below low warning threshold"))
+    if math.isfinite(pressure_hpa):
+        if pressure_hpa >= 1025:
+            rules.append(_decision_rule("warning", "pressure_hpa", "pressure_hpa forecast exceeded warning threshold"))
+        elif pressure_hpa <= 995:
+            rules.append(_decision_rule("warning", "pressure_hpa", "pressure_hpa forecast is below low warning threshold"))
+    return _pick_decision(rules)
+
+
+def build_forecast_decision_v1(
+    forecast_payloads_jsonl: str | Path,
+    output_jsonl: str | Path,
+) -> Path:
+    output_path = Path(output_jsonl)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with Path(forecast_payloads_jsonl).open(encoding="utf-8") as src, output_path.open("w", encoding="utf-8") as dst:
+        for line in src:
+            if not line.strip():
+                continue
+            forecast = json.loads(line)
+            predicted_sensor = forecast.get("predicted_sensor") or {}
+            model_readiness = forecast.get("model_readiness", "EXPERIMENTAL")
+            decision = _forecast_decision(predicted_sensor, model_readiness)
+            payload = {
+                "schema": FORECAST_DECISION_SCHEMA,
+                "gateway_id": forecast["gateway_id"],
+                "node_id": forecast["node_id"],
+                "room_id": forecast["room_id"],
+                "input_start_timestamp": forecast["input_start_timestamp"],
+                "input_end_timestamp": forecast["input_end_timestamp"],
+                "forecast_horizon_minutes": forecast.get("forecast_horizon_minutes"),
+                "env_status": decision["severity"],
+                "main_factor": decision["factor"],
+                "reason": decision["reason"],
+                "predicted_sensor": predicted_sensor,
+                "model_version": forecast.get("model_version", MODEL_VERSION),
+                "model_readiness": model_readiness,
+                "metrics_ref": forecast.get("metrics_ref"),
             }
             dst.write(json.dumps(payload, separators=(",", ":")) + "\n")
     return output_path

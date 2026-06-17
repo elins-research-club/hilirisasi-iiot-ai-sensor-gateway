@@ -18,6 +18,7 @@ HAS_ML_DEPS = HAS_NUMPY and HAS_TORCH
 
 from iiot_ai_sensor_gateway.forecasting import (
     TARGET_NAMES,
+    build_forecast_decision_v1,
     build_lstm_forecaster,
     evaluate_lstm_forecast,
     predict_lstm_forecast,
@@ -116,6 +117,45 @@ class ForecastModelSelectionTests(unittest.TestCase):
             self.assertEqual(result['candidate_status'], 'NEEDS_TUNING')
             self.assertEqual(len(result['top_runs']), 2)
             self.assertIn('target_notes', result)
+
+
+class ForecastDecisionTests(unittest.TestCase):
+    def test_build_forecast_decision_v1_all_sensor_rules(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            forecasts = temp / 'forecast_payloads.jsonl'
+            output = temp / 'decision_payloads.jsonl'
+            base = {
+                'schema': 'iiot.ai_sensor.forecast.v1',
+                'gateway_id': 'gw-test',
+                'node_id': 'node-1',
+                'room_id': 'room-test',
+                'input_start_timestamp': '2026-06-01T00:00:00+00:00',
+                'input_end_timestamp': '2026-06-01T00:12:00+00:00',
+                'forecast_horizon_minutes': 5,
+                'model_version': 'test-model',
+                'metrics_ref': 'metrics.json',
+                'model_readiness': 'EXPERIMENTAL',
+            }
+            rows = [
+                {**base, 'predicted_sensor': {'temperature_c': 30, 'humidity_pct': 60, 'pressure_hpa': 1012, 'bme_gas_raw': 1200, 'co_raw': 0.01}},
+                {**base, 'node_id': 'node-2', 'predicted_sensor': {'temperature_c': 36, 'humidity_pct': 60, 'pressure_hpa': 1012, 'bme_gas_raw': 1200, 'co_raw': 0.01}},
+                {**base, 'node_id': 'node-3', 'predicted_sensor': {'temperature_c': 30, 'humidity_pct': 60, 'pressure_hpa': 1012, 'bme_gas_raw': 3600, 'co_raw': 0.09}},
+                {**base, 'node_id': 'node-4', 'model_readiness': 'NOT_READY', 'predicted_sensor': {'temperature_c': 30, 'humidity_pct': 60, 'pressure_hpa': 1012, 'bme_gas_raw': 1200, 'co_raw': 0.01}},
+            ]
+            forecasts.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+
+            path = build_forecast_decision_v1(forecasts, output)
+            decisions = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+
+            self.assertEqual(decisions[0]['env_status'], 'normal')
+            self.assertEqual(decisions[1]['env_status'], 'warning')
+            self.assertEqual(decisions[1]['main_factor'], 'temperature_c')
+            self.assertEqual(decisions[2]['env_status'], 'critical')
+            self.assertEqual(decisions[2]['main_factor'], 'co_raw')
+            self.assertEqual(decisions[3]['env_status'], 'warning')
+            self.assertEqual(decisions[3]['main_factor'], 'model_readiness')
+            self.assertEqual(decisions[0]['schema'], 'iiot.ai_sensor.forecast_decision.v1')
 
 
 @unittest.skipUnless(HAS_ML_DEPS, 'NumPy and PyTorch are optional ML dependencies')
