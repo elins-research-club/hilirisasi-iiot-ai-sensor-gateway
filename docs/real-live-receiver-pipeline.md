@@ -23,13 +23,22 @@ ESP32-C6 + sensor
 
 ## Status Implementasi
 
-Receiver live penuh belum diimplementasikan di repo ini. Bagian ini menjadi
-handoff untuk integrasi hardware/LoRa/serial. Repo ini saat ini menyediakan:
+Repo sekarang menyediakan receiver live skeleton v0. Receiver ini bisa membaca
+line-delimited JSON dari replay file atau serial UART/LoRa transparent mode,
+memvalidasi payload dengan parser/validator existing, lalu menulis accepted dan
+rejected JSONL.
+
+Receiver ini belum menjadi receiver hardware final. Konfigurasi khusus Ebyte
+E32/E22, pin M0/M1/AUX, channel, reconnect kompleks, dan tuning deployment tetap
+menjadi handoff hard-prog.
+
+Repo saat ini menyediakan:
 
 - firmware skeleton ESP32-C6;
 - compact payload contract;
 - parser compact payload;
 - validator dan preprocessing core;
+- receiver skeleton `receive-real-live`;
 - forecasting/evaluator/model selector;
 - forecast payload dan decision payload v1;
 - contoh fixture real-like untuk test kontrak.
@@ -49,6 +58,38 @@ Receiver live harus menangani:
 
 Receiver live bukan model AI dan bukan backend. Receiver hanya membawa data real
 ke canonical schema atau raw capture yang bisa diproses ulang.
+
+## Command
+
+Replay fixture tanpa hardware:
+
+```powershell
+py -3.13 run_gateway.py receive-real-live --replay-file tests/fixtures/real_payload_samples.jsonl --output-dir data/real_live_logs --max-messages 10
+```
+
+Serial UART/LoRa transparent mode:
+
+```powershell
+py -3.13 -m pip install -e ".[serial]"
+py -3.13 run_gateway.py receive-real-live --port /dev/serial0 --baudrate 9600 --timeout 1.0 --output-dir data/real_live_logs
+```
+
+Di Windows, ganti port dengan `COMx`, misalnya `COM5`.
+
+## Output Receiver v0
+
+Receiver v0 menulis:
+
+```text
+data/real_live_logs/accepted_payloads.jsonl
+data/real_live_logs/rejected_payloads.jsonl
+data/real_live_logs/receiver_events.jsonl
+```
+
+Accepted payload berisi metadata receive, source, raw line, payload compact yang
+sudah di-unwrap, node, room, sequence, dan validation issues soft. Rejected
+payload berisi metadata receive, raw line, kategori error, pesan error, dan
+validation issues jika parse berhasil tetapi validasi gagal.
 
 ## Hubungan Dengan Training
 
@@ -81,7 +122,7 @@ payload MQTT. Tahap tersebut berada di luar scope task ini.
 
 ## Batasan
 
-- Belum ada receiver serial/LoRa penuh.
+- Receiver v0 belum mengatur konfigurasi Ebyte E32/E22 secara hardware-specific.
 - Belum ada MQTT publish.
 - Belum ada backend/dashboard/OpenClaw runtime.
 - Threshold decision layer v1 belum final sampai dikalibrasi dengan sensor real.

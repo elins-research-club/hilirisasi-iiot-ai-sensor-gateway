@@ -84,6 +84,26 @@ Data/model/artifact simulasi dan real harus tetap dipisah. `data/`, `models/`,
 `docs/real-offline-file-pipeline.md`, `docs/real-live-receiver-pipeline.md`, dan
 `docs/real-receiver-contract.md`.
 
+Receiver live skeleton v0 tersedia untuk replay file dan serial UART/LoRa
+transparent mode. Mode replay tidak butuh hardware:
+
+```powershell
+py -3.13 run_gateway.py receive-real-live --replay-file tests/fixtures/real_payload_samples.jsonl --output-dir data/real_live_logs --max-messages 10
+```
+
+Mode serial memakai `pyserial` secara opsional:
+
+```powershell
+py -3.13 -m pip install -e ".[serial]"
+py -3.13 run_gateway.py receive-real-live --port COM5 --baudrate 9600 --timeout 1.0 --output-dir data/real_live_logs
+py -3.13 run_gateway.py receive-real-live --port /dev/serial0 --baudrate 9600 --timeout 1.0 --output-dir data/real_live_logs
+```
+
+Output receiver ditulis ke `accepted_payloads.jsonl`, `rejected_payloads.jsonl`,
+dan `receiver_events.jsonl` di folder output. Receiver v0 hanya logging,
+parsing, dan validasi payload; training real tetap lewat real offline file
+workflow.
+
 ## Folder Utama
 
 ```text

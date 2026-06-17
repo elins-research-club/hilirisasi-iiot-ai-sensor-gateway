@@ -71,6 +71,10 @@ Receiver boleh membungkus payload dengan metadata receive:
 Untuk parser existing, object di field `payload` dapat diberikan langsung ke
 `PayloadParser.parse(...)`. Metadata wrapper disimpan untuk audit raw capture.
 
+Receiver skeleton v0 melakukan unwrap ini otomatis untuk replay file dan serial
+line source. Jika line memiliki field `payload`, field tersebut yang diparse;
+metadata wrapper tetap disimpan di raw log.
+
 ## Field Wajib
 
 Payload yang diterima harus memiliki:
@@ -130,7 +134,16 @@ Payload harus ditolak atau ditandai invalid keras jika:
 
 ## Output Folder
 
-Receiver real disarankan menulis raw capture ke:
+Receiver live skeleton v0 menulis log ke:
+
+```text
+data/real_live_logs/accepted_payloads.jsonl
+data/real_live_logs/rejected_payloads.jsonl
+data/real_live_logs/receiver_events.jsonl
+```
+
+Untuk capture raw jangka panjang, receiver real juga disarankan menulis raw
+capture ke:
 
 ```text
 data/real_raw/<date>_<receiver_id>.jsonl
@@ -146,6 +159,8 @@ Kedua folder berada di bawah `data/`, sehingga ignored dari Git.
 
 ## Handoff Ke Hard-Prog
 
-Bagian receiver serial/LoRa penuh belum dikerjakan. Hard-prog perlu memastikan
-payload yang dikirim ESP32-C6 mengikuti kontrak field, timestamp, sequence,
-status, quality, flags, dan sensor object di dokumen ini.
+Receiver serial/LoRa skeleton sudah tersedia, tetapi konfigurasi hardware penuh
+belum dikerjakan. Hard-prog perlu memastikan payload yang dikirim ESP32-C6
+mengikuti kontrak field, timestamp, sequence, status, quality, flags, dan sensor
+object di dokumen ini. Hard-prog juga perlu menyesuaikan port, baudrate, mode
+Ebyte, wiring, dan service runtime Raspberry Pi.
