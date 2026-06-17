@@ -186,6 +186,16 @@ Field utama:
 - `predicted_sensor`: nilai prediksi dalam satuan asli;
 - `model_version`, `metrics_ref`, `model_readiness`.
 
+Setelah payload forecast terbentuk, decision layer lokal v1 dapat dibuat dengan:
+
+```powershell
+py -3.13 run_gateway.py build-forecast-decision-v1 --forecast-payloads models/lstm_forecast/latest/forecast_payloads.jsonl --output models/lstm_forecast/latest/decision_payloads.jsonl
+```
+
+Decision layer ini rule-based, mengevaluasi semua target sensor utama, dan
+menghasilkan status `normal`, `warning`, atau `critical`. Detail rule ada di
+`docs/forecast-decision-layer.md`.
+
 ## Experiment Runner
 
 `run-forecast-experiments` membuat dataset forecasting per horizon/window size,
@@ -204,6 +214,28 @@ Untuk smoke test cepat, gunakan konfigurasi kecil:
 ```powershell
 py -3.13 run_gateway.py run-forecast-experiments --windows data/processed/lstm_windows.jsonl --output-dir models/forecast_experiments/smoke --horizons 5 --window-sizes 12 --hidden-sizes 32 --epochs 2 --batch-size 64 --device cpu
 ```
+
+## Model Selection
+
+`select-best-forecast-model` membaca `summary.csv` dari experiment runner dan
+memilih kandidat model sementara:
+
+```powershell
+py -3.13 run_gateway.py select-best-forecast-model --summary models/forecast_experiments/latest/summary.csv --output models/forecast_experiments/latest/best_model_selection.json
+```
+
+Selector memakai skill score semua target utama: `temperature_c`,
+`humidity_pct`, `pressure_hpa`, `bme_gas_raw`, dan `co_raw`. CO dan gas tetap
+punya bobot penting karena paling dekat dengan risiko udara, tetapi target lain
+tetap ikut dihitung.
+
+Jika overall, `co_raw`, dan `bme_gas_raw` masih kalah baseline, selector tetap
+memilih kandidat dengan LSTM RMSE terendah dan memberi status
+`NEEDS_TUNING`. Status ini berarti kandidat berguna untuk eksperimen berikutnya,
+bukan model final.
+
+Ringkasan eksperimen CUDA terakhir dan interpretasinya dicatat di
+`docs/progress-lstm-forecasting-v1.md`.
 
 ## Batasan
 

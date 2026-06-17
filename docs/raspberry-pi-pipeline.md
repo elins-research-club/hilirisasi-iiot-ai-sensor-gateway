@@ -23,6 +23,7 @@ Raspberry Pi menerima:
 9. Tulis `data/processed/lstm_windows.jsonl`.
 10. Opsional: buat dataset forecasting X/y, train LSTM multi-target, lalu evaluasi MAE/RMSE vs baseline.
 11. Opsional: jalankan experiment runner untuk membandingkan beberapa horizon dan ukuran LSTM.
+12. Opsional: buat forecast payload dan decision payload lokal `normal/warning/critical`.
 
 ## Workflow Gary yang Direkomendasikan
 
@@ -78,3 +79,21 @@ Ringkasan eksperimen ditulis ke `summary.json` dan `summary.csv`. Status model
 dibaca dari `data_status`, `baseline_comparison_status`, dan `model_readiness`.
 Jika LSTM masih kalah dari baseline, pipeline tetap boleh dianggap berjalan,
 tetapi model belum cukup kuat untuk decision layer.
+
+Model candidate dapat dipilih dari summary:
+
+```powershell
+py -3.13 run_gateway.py select-best-forecast-model --summary models/forecast_experiments/latest/summary.csv --output models/forecast_experiments/latest/best_model_selection.json
+```
+
+Setelah prediksi dibuat, output angka forecast dapat diterjemahkan menjadi
+decision payload lokal:
+
+```powershell
+py -3.13 run_gateway.py build-forecast-payload-v1 --predictions models/lstm_forecast/latest/predictions.jsonl --metrics models/lstm_forecast/latest/metrics.json --output models/lstm_forecast/latest/forecast_payloads.jsonl
+py -3.13 run_gateway.py build-forecast-decision-v1 --forecast-payloads models/lstm_forecast/latest/forecast_payloads.jsonl --output models/lstm_forecast/latest/decision_payloads.jsonl
+```
+
+Decision layer v1 mengevaluasi semua target utama: temperature, humidity,
+pressure, BME gas raw, dan CO. Output ini masih lokal, rule-based, dan belum
+MQTT/backend/OpenClaw.

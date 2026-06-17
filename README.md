@@ -151,12 +151,14 @@ py -3.13 run_gateway.py train-lstm-forecast --dataset data/modeling/lstm_forecas
 py -3.13 run_gateway.py evaluate-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --model models/lstm_forecast/latest/model.pt --eval-batch-size 1024
 py -3.13 run_gateway.py predict-lstm-forecast --windows data/processed/lstm_windows.jsonl --model models/lstm_forecast/latest/model.pt --output models/lstm_forecast/latest/predictions.jsonl --max-windows 10
 py -3.13 run_gateway.py build-forecast-payload-v1 --predictions models/lstm_forecast/latest/predictions.jsonl --metrics models/lstm_forecast/latest/metrics.json --output models/lstm_forecast/latest/forecast_payloads.jsonl
+py -3.13 run_gateway.py build-forecast-decision-v1 --forecast-payloads models/lstm_forecast/latest/forecast_payloads.jsonl --output models/lstm_forecast/latest/decision_payloads.jsonl
 ```
 
 Untuk membandingkan beberapa horizon dan ukuran LSTM sekaligus:
 
 ```powershell
 py -3.13 run_gateway.py run-forecast-experiments --windows data/processed/lstm_windows.jsonl --output-dir models/forecast_experiments/latest --horizons 5,15,30 --window-sizes 12,24,36 --hidden-sizes 32,64 --epochs 30 --batch-size 64 --device auto --eval-batch-size 1024
+py -3.13 run_gateway.py select-best-forecast-model --summary models/forecast_experiments/latest/summary.csv --output models/forecast_experiments/latest/best_model_selection.json
 ```
 
 Untuk eksperimen CUDA, gunakan `--device cuda`; jika VRAM penuh saat evaluasi, turunkan `--eval-batch-size`.
@@ -168,6 +170,11 @@ Evaluator forecasting sekarang memisahkan status data, perbandingan baseline,
 dan kesiapan model. Jika LSTM kalah dari `last_value_baseline`, pipeline tetap
 valid, tetapi model masih dianggap tahap eksperimen.
 Metrics juga tersedia dalam skala normalized dan satuan asli hasil denormalisasi.
+Model selector memilih kandidat eksperimen dari `summary.csv`, sedangkan
+decision layer lokal rule-based mengubah forecast semua target sensor utama
+menjadi status awal `normal`, `warning`, atau `critical`. Detail ada di
+`docs/lstm-forecasting.md`, `docs/progress-lstm-forecasting-v1.md`, dan
+`docs/forecast-decision-layer.md`.
 
 ## Verifikasi Python
 
@@ -183,6 +190,8 @@ py -3.13 -m unittest discover -s tests -p 'test_*.py' -q
 - `docs/esp32-preprocessing.md`
 - `docs/raspberry-pi-pipeline.md`
 - `docs/lstm-forecasting.md`
+- `docs/progress-lstm-forecasting-v1.md`
+- `docs/forecast-decision-layer.md`
 - `docs/data-contract.md`
 - `docs/progress-gary-derived-project-schema.md`
 - `docs/progress-gary-stafford-preprocessing.md`
