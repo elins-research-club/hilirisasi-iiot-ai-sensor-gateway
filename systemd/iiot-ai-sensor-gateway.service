@@ -1,16 +1,30 @@
 [Unit]
-Description=IIoT AI Sensor Gateway pre-model pipeline
+Description=IIoT AI Sensor Gateway live serial receiver
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=pi
+Group=pi
 WorkingDirectory=/home/pi/iiot-ai-sensor-gateway
-EnvironmentFile=/home/pi/iiot-ai-sensor-gateway/.env
-ExecStart=/home/pi/iiot-ai-sensor-gateway/.venv/bin/python run_gateway.py run --input-file data/incoming/payloads.jsonl --output-dir data/processed
-Restart=always
+EnvironmentFile=-/etc/default/iiot-ai-sensor-gateway
+Environment=IIOT_CONFIG_FILE=/home/pi/iiot-ai-sensor-gateway/config/default.toml
+Environment=IIOT_SERIAL_PORT=/dev/ttyUSB0
+Environment=IIOT_SERIAL_BAUD=9600
+ExecStart=/home/pi/iiot-ai-sensor-gateway/.venv/bin/python run_gateway.py receive-real-live --port ${IIOT_SERIAL_PORT} --baudrate ${IIOT_SERIAL_BAUD} --output-dir /var/lib/iiot-ai-sensor-gateway/real_live_logs
+Restart=on-failure
 RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# The application and virtualenv live under /home/pi. Keep home readable but
+# immutable; ProtectHome=true would make WorkingDirectory/ExecStart inaccessible.
+ProtectHome=read-only
+ReadWritePaths=/var/lib/iiot-ai-sensor-gateway
 
 [Install]
 WantedBy=multi-user.target

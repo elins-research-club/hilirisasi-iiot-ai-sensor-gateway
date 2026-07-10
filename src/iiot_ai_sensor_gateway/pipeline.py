@@ -13,8 +13,16 @@ from .windowing import WindowBuilder
 class PreModelPipeline:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
-        self.parser = PayloadParser(config.identity.gateway_id, config.identity.default_room_id)
-        self.validator = ReadingValidator(config.validation_ranges, config.pipeline.sequence_gap_warn)
+        self.parser = PayloadParser(
+            config.identity.gateway_id,
+            config.identity.default_room_id,
+            allow_legacy_v1=config.contract.allow_legacy_v1,
+        )
+        self.validator = ReadingValidator(
+            config.validation_ranges,
+            config.pipeline.sequence_gap_warn,
+            config.pipeline.validation_state_max_entries,
+        )
         self.buffer = NodeBuffer(config.pipeline.buffer_max_size)
         self.normalizer = MinMaxNormalizer(config.normalization_ranges)
         self.window_builder = WindowBuilder(config.pipeline.window_size, config.pipeline.window_step)
@@ -24,9 +32,17 @@ class PreModelPipeline:
         reading = self.parser.parse(payload)
         result = self.validator.validate(reading)
         self.buffer.add(result)
-        points = resample(self.buffer.node_items(reading.node_id), self.config.pipeline.resample_interval_sec)
+        points = resample(
+            self.buffer.node_items(reading.node_id),
+            self.config.pipeline.resample_interval_sec,
+        )
+        eligible_points = [
+            point
+            for point in points
+            if point.valid_ratio >= self.config.pipeline.min_valid_ratio
+        ]
         windows: list[WindowSample] = []
-        for vector in extract_features(points):
+        for vector in extract_features(eligible_points):
             key = (vector.node_id, vector.timestamp.isoformat())
             if key in self.processed_features:
                 continue

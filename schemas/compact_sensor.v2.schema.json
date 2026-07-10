@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://greyghst.local/schemas/compact_sensor.v2.schema.json",
+  "title": "Compact sensor payload v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "n", "r", "ts", "seq", "bid", "st", "q", "f", "ok", "s"],
+  "properties": {
+    "v": {"const": 2},
+    "gw": {"type": "string", "minLength": 1},
+    "n": {"type": "string", "minLength": 1},
+    "r": {"type": "string", "minLength": 1},
+    "ts": {
+      "description": "Node uptime seconds or an absolute RFC3339/epoch timestamp. Gateway receive time is authoritative when uptime is used.",
+      "oneOf": [
+        {"type": "number", "minimum": 0},
+        {"type": "string", "minLength": 1}
+      ]
+    },
+    "seq": {"type": "integer", "minimum": 0},
+    "bid": {"type": "string", "minLength": 1, "maxLength": 64},
+    "st": {"type": "string", "enum": ["ok", "degraded", "sensor_error"]},
+    "q": {"type": "string", "enum": ["valid", "partial", "invalid"]},
+    "f": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      ]
+    },
+    "ok": {
+      "type": "object",
+      "additionalProperties": {"oneOf": [{"type": "boolean"}, {"type": "string"}]}
+    },
+    "radio": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rssi": {"type": ["number", "null"]},
+        "snr": {"type": ["number", "null"]}
+      }
+    },
+    "lora": {
+      "description": "Migration alias for inline radio metadata; wrapper-level radio is preferred.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rssi": {"type": ["number", "null"]},
+        "snr": {"type": ["number", "null"]}
+      }
+    },
+    "s": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "tc": {"type": ["number", "null"]},
+        "h": {"type": ["number", "null"]},
+        "p": {"type": ["number", "null"]},
+        "bme": {"type": ["number", "null"]},
+        "co": {"type": ["number", "null"]},
+        "n2mv": {"type": ["number", "null"]},
+        "n2r": {"type": ["number", "null"]},
+        "o3": {"type": ["number", "null"]},
+        "co2": {"type": ["number", "null"]},
+        "pm1": {"type": ["number", "null"]},
+        "pm25": {"type": ["number", "null"]},
+        "pm10": {"type": ["number", "null"]},
+        "bv": {"type": ["number", "null"]},
+        "bi": {"type": ["number", "null"]},
+        "bp": {"type": ["number", "null"]}
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://greyghst.local/schemas/sensor_status.v1.schema.json",
+  "title": "Sensor gateway retained status v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "gateway_id", "timestamp", "status", "nodes"],
+  "properties": {
+    "schema_version": {"const": "sensor_status.v1"},
+    "gateway_id": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "status": {"type": "string", "enum": ["online", "degraded", "offline"]},
+    "nodes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["node_id", "room_id", "boot_id", "last_sequence", "last_event_id", "last_receive_timestamp", "age_sec", "node_health"],
+        "properties": {
+          "node_id": {"type": "string", "minLength": 1},
+          "room_id": {"type": "string", "minLength": 1},
+          "boot_id": {"type": "string", "minLength": 1},
+          "last_sequence": {"type": "integer", "minimum": 0},
+          "last_event_id": {"type": "string"},
+          "last_receive_timestamp": {"type": "string", "format": "date-time"},
+          "age_sec": {"type": "number", "minimum": 0},
+          "node_health": {"type": "string", "enum": ["healthy", "degraded", "stale", "invalid", "offline", "unknown"]}
+        }
+      }
+    }
+  }
+}

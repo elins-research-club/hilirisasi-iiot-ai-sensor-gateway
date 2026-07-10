@@ -15,6 +15,7 @@ dependencies = []
 dev = ['pytest>=8.0', 'ruff>=0.5']
 ml = ['numpy>=2.0', 'torch>=2.6']
 serial = ['pyserial>=3.5']
+streaming = ['river>=0.22']
 
 [project.scripts]
 iiot-ai-sensor-gateway = 'iiot_ai_sensor_gateway.cli:main'

@@ -1,9 +1,10 @@
 [identity]
-gateway_id = 'raspi_gateway_01'
-default_room_id = 'room_A'
+gateway_id = "raspi_gateway_01"
+default_room_id = "room_A"
 
 [pipeline]
 buffer_max_size = 2048
+validation_state_max_entries = 100000
 resample_interval_sec = 60
 window_size = 12
 window_step = 1
@@ -11,25 +12,60 @@ min_valid_ratio = 0.75
 node_silent_after_sec = 180
 sequence_gap_warn = true
 
+[contract]
+# Keep true only while replaying compact v1 regression fixtures. New firmware emits v2.
+allow_legacy_v1 = true
+data_topic = "iot/{gateway_id}/data"
+status_topic = "iot/{gateway_id}/status/sensor"
+
+[receiver]
+rotate_max_bytes = 10485760
+serial_idle_sleep_sec = 0.05
+reconnect_initial_sec = 0.5
+reconnect_max_sec = 30.0
+
 [normalization]
-method = 'minmax'
+method = "minmax"
 
 [normalization.minmax]
 temperature_c = [-10.0, 80.0]
 humidity_pct = [0.0, 100.0]
-pressure_hpa = [900.0, 1100.0]
+pressure_hpa = [800.0, 1200.0]
+bme_gas_ohm = [100.0, 10000000.0]
+co_ppm = [0.0, 1000.0]
+no2_raw_mv = [0.0, 3300.0]
+no2_ratio = [0.0, 20.0]
+o3_ppm = [0.0, 10.0]
+co2_ppm = [0.0, 10000.0]
+pm1_ug_m3 = [0.0, 5000.0]
+pm25_ug_m3 = [0.0, 5000.0]
+pm10_ug_m3 = [0.0, 5000.0]
+battery_voltage = [0.0, 60.0]
+current_ma = [-20000.0, 20000.0]
+power_mw = [-1000000.0, 1000000.0]
+# Migration/reference-only fields.
 voc_raw = [0.0, 5000.0]
-bme_gas_raw = [0.0, 5000.0]
-co_raw = [0.0, 0.05]
-gas_raw = [0.0, 5000.0]
-gas_delta = [-5000.0, 5000.0]
-gas_mean_3 = [0.0, 5000.0]
-gas_std_3 = [0.0, 2500.0]
+bme_gas_raw = [0.0, 50000.0]
+co_raw = [0.0, 1.0]
+gas_raw = [0.0, 50000.0]
 
 [validation.ranges]
 temperature_c = [-10.0, 80.0]
 humidity_pct = [0.0, 100.0]
-pressure_hpa = [900.0, 1100.0]
+pressure_hpa = [800.0, 1200.0]
+bme_gas_ohm = [100.0, 10000000.0]
+co_ppm = [0.0, 1000.0]
+no2_raw_mv = [0.0, 3300.0]
+no2_ratio = [0.0, 20.0]
+o3_ppm = [0.0, 10.0]
+co2_ppm = [0.0, 10000.0]
+pm1_ug_m3 = [0.0, 5000.0]
+pm25_ug_m3 = [0.0, 5000.0]
+pm10_ug_m3 = [0.0, 5000.0]
+battery_voltage = [0.0, 60.0]
+current_ma = [-20000.0, 20000.0]
+power_mw = [-1000000.0, 1000000.0]
+# Migration/reference-only fixture limits; not RAB calibration ranges.
 voc_raw = [0.0, 5000.0]
 bme_gas_raw = [0.0, 5000.0]
 co_raw = [0.0, 0.05]

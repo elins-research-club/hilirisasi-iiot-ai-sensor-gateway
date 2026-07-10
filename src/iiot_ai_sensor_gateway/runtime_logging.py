@@ -1,3 +1,9 @@
+"""Optional logging helper retained for explicit tool use.
+
+The live receiver owns its append-only audit logs. Importing this module does
+not configure global logging and it is not wired automatically into runtime.
+"""
+
 from __future__ import annotations
 
 import json

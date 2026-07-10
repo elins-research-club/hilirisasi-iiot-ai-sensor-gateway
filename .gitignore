@@ -51,3 +51,7 @@ firmware/**/.pio/
 firmware/**/.vscode/
 firmware/**/sdkconfig*
 !firmware/**/sdkconfig.defaults
+# Official Bosch source is installed locally for the optional BME688 profile.
+# Keep the third-party checkout out of project commits.
+firmware/esp32-c6-sensor-node/lib/BME68x_SensorAPI/
+.graphifyignore

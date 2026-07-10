@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://greyghst.local/schemas/sensor_ai.v1.schema.json",
+  "title": "Sensor and AI event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event_id", "gateway_id", "node_id", "room_id", "timestamp", "source", "sensor", "ai", "deployment"],
+  "properties": {
+    "schema_version": {"const": "sensor_ai.v1"},
+    "event_id": {"type": "string", "pattern": "^se_[0-9a-f]{32}$"},
+    "gateway_id": {"type": "string", "minLength": 1},
+    "node_id": {"type": "string", "minLength": 1},
+    "room_id": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compact_version", "boot_id", "sequence", "node_timestamp", "receive_timestamp", "time_quality", "transport", "radio", "sensor_status", "flags"],
+      "properties": {
+        "compact_version": {"type": "integer", "enum": [1, 2]},
+        "boot_id": {"type": "string", "minLength": 1},
+        "sequence": {"type": "integer", "minimum": 0},
+        "node_timestamp": {"type": ["number", "string", "null"]},
+        "receive_timestamp": {"type": "string", "format": "date-time"},
+        "time_quality": {"type": "string", "enum": ["node_synced", "node_epoch", "gateway_received", "source_clock", "unknown"]},
+        "transport": {"type": "string"},
+        "radio": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rssi", "snr"],
+          "properties": {
+            "rssi": {"type": ["number", "null"]},
+            "snr": {"type": ["number", "null"]}
+          }
+        },
+        "sensor_status": {"type": "object", "additionalProperties": {"type": "string"}},
+        "flags": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      }
+    },
+    "sensor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["temperature_c", "humidity_pct", "pressure_hpa", "bme_gas_ohm", "co_ppm", "no2_raw_mv", "no2_ratio", "o3_ppm", "co2_ppm", "pm1_ug_m3", "pm25_ug_m3", "pm10_ug_m3", "battery_voltage", "current_ma", "power_mw"],
+      "properties": {
+        "temperature_c": {"type": ["number", "null"]},
+        "humidity_pct": {"type": ["number", "null"]},
+        "pressure_hpa": {"type": ["number", "null"]},
+        "bme_gas_ohm": {"type": ["number", "null"]},
+        "co_ppm": {"type": ["number", "null"]},
+        "no2_raw_mv": {"type": ["number", "null"]},
+        "no2_ratio": {"type": ["number", "null"]},
+        "o3_ppm": {"type": ["number", "null"]},
+        "co2_ppm": {"type": ["number", "null"]},
+        "pm1_ug_m3": {"type": ["number", "null"]},
+        "pm25_ug_m3": {"type": ["number", "null"]},
+        "pm10_ug_m3": {"type": ["number", "null"]},
+        "battery_voltage": {"type": ["number", "null"]},
+        "current_ma": {"type": ["number", "null"]},
+        "power_mw": {"type": ["number", "null"]}
+      }
+    },
+    "ai": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["env_status", "anomaly_score", "forecast_status", "main_factor", "battery_status", "node_health", "confidence", "abstain"],
+      "properties": {
+        "env_status": {"type": "string", "enum": ["normal", "warning", "critical", "unknown"]},
+        "anomaly_score": {"type": ["number", "null"]},
+        "forecast_status": {"type": "string"},
+        "main_factor": {"type": ["string", "null"]},
+        "battery_status": {"type": "string", "enum": ["normal", "warning", "critical", "unknown"]},
+        "node_health": {"type": "string", "enum": ["healthy", "degraded", "stale", "invalid", "offline", "unknown"]},
+        "confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "abstain": {"type": "boolean"}
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["config_version"],
+      "properties": {"config_version": {"type": "string", "minLength": 1}}
+    }
+  }
+}

@@ -59,7 +59,11 @@ def evaluate_preprocessing(
     gateway_layer: str = 'raspberry_pi_pre_model_pipeline',
 ) -> EvaluationResult:
     parser = PayloadParser(config.identity.gateway_id, config.identity.default_room_id)
-    validator = ReadingValidator(config.validation_ranges, config.pipeline.sequence_gap_warn)
+    validator = ReadingValidator(
+        config.validation_ranges,
+        config.pipeline.sequence_gap_warn,
+        config.pipeline.validation_state_max_entries,
+    )
     total = valid = invalid = 0
     nodes: set[str] = set()
     start = None
