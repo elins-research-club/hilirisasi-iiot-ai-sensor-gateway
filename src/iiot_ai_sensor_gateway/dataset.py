@@ -1,3 +1,9 @@
+"""Legacy JSONL utility retained for compatibility.
+
+The active live path uses ``real.live_receiver`` and the canonical pipeline. This
+module is not invoked automatically by the production receiver.
+"""
+
 from __future__ import annotations
 
 import json

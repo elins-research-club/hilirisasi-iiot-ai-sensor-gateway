@@ -1,0 +1,134 @@
+{
+  "schema_version": "iiot.dataset_catalog.v1",
+  "datasets": [
+    {
+      "id": "uci_air_quality_360",
+      "name": "UCI Air Quality",
+      "lane": "air_reference_regression",
+      "landing_url": "https://archive.ics.uci.edu/dataset/360/air+quality",
+      "download_url": "https://archive.ics.uci.edu/static/public/360/air+quality.zip",
+      "license": "CC BY 4.0",
+      "download_mode": "script_allowed",
+      "sha256": "d4a64013fb385288a8a48d9d193ca7079b2e1bbddf6f8d458feb8c08ab2b8a2a",
+      "expected_size_note": "1,543,989-byte archive verified 2026-07-10",
+      "canonical_coverage": ["temperature_c", "humidity_pct"],
+      "reference_only_fields": ["co_mg_m3", "no2_ug_m3", "nox_ppb"],
+      "explicitly_missing": ["pressure_hpa", "bme_gas_ohm", "o3_ppm", "co2_ppm", "pm1_ug_m3", "pm25_ug_m3", "pm10_ug_m3", "battery_voltage", "current_ma", "power_mw"],
+      "quality_notes": [
+        "Missing values use -200 and must become null.",
+        "CO reference is mg/m3 and is not silently relabelled as ppm.",
+        "The nominal O3-targeted metal-oxide response is not O3 ground truth.",
+        "The dataset includes cross-sensitivity and sensor drift and is suitable for regression/drift experiments, not chip-identical deployment claims."
+      ]
+    },
+    {
+      "id": "bristol_smart_building_bme680",
+      "name": "Multi-sensor, Multi-device Smart Building Indoor Environmental Dataset",
+      "lane": "indoor_bme_like",
+      "landing_url": "https://data.bris.ac.uk/data/dataset/fwlmb11wni392kodtyljkw4n2",
+      "download_url": null,
+      "license": "Non-Commercial Government Licence for public sector information",
+      "download_mode": "manual_only",
+      "expected_size_note": "2.2 GiB complete archive",
+      "canonical_coverage": ["temperature_c", "humidity_pct", "pressure_hpa"],
+      "reference_only_fields": ["bme680_iaq_index", "measurement_accuracy", "rssi", "light", "acceleration"],
+      "explicitly_missing": ["bme_gas_ohm", "co_ppm", "no2_raw_mv", "no2_ratio", "o3_ppm", "co2_ppm", "pm1_ug_m3", "pm25_ug_m3", "pm10_ug_m3", "battery_voltage", "current_ma", "power_mw"],
+      "quality_notes": [
+        "The source sensor is BME680, not chip-identical to BME688.",
+        "The source Gas value is an IAQ index, not gas resistance in ohms and not calibrated MH-Z19 CO2.",
+        "Use leave-device-out evaluation across the eight endpoints when possible.",
+        "The complete archive is intentionally not auto-downloaded."
+      ]
+    },
+    {
+      "id": "gary_stafford_iot_telemetry",
+      "name": "Gary Stafford IoT telemetry",
+      "lane": "legacy_regression_only",
+      "landing_url": "https://github.com/garystafford/iot-telemetry",
+      "download_url": null,
+      "license": "Verify upstream repository before redistribution",
+      "download_mode": "existing_local_or_manual",
+      "canonical_coverage": ["temperature_c", "humidity_pct"],
+      "reference_only_fields": ["co_raw", "lpg_raw", "smoke_raw", "motion"],
+      "explicitly_missing": ["pressure_hpa", "bme_gas_ohm", "co_ppm", "no2_raw_mv", "no2_ratio", "o3_ppm", "co2_ppm", "pm1_ug_m3", "pm25_ug_m3", "pm10_ug_m3", "battery_voltage", "current_ma", "power_mw"],
+      "quality_notes": [
+        "Regression and pipeline compatibility only.",
+        "Derived pressure or calibrated gas values are synthetic and must never be mixed with real field evaluation."
+      ]
+    },
+    {
+      "id": "project_real_sensor_capture",
+      "name": "Project real sensor capture",
+      "lane": "real_offline_and_live",
+      "landing_url": null,
+      "download_url": null,
+      "license": "Project-owned; define governance before sharing",
+      "download_mode": "capture_from_hardware",
+      "expected_size_note": "unknown until field capture",
+      "canonical_coverage": ["all fields actually produced by verified RAB sensors"],
+      "reference_only_fields": [],
+      "explicitly_missing": [],
+      "quality_notes": [
+        "This is the only lane that can validate deployed sensor calibration and field performance.",
+        "Store raw envelopes append-only and derive canonical data through the official adapter."
+      ]
+    },
+    {
+      "id": "zenodo_fidas_pm_reference_7198378",
+      "name": "Fidas 200S reference PM at two-minute resolution",
+      "lane": "pm_reference_calibration",
+      "landing_url": "https://doi.org/10.5281/zenodo.7198378",
+      "download_url": "https://zenodo.org/api/records/7198378/files/df_pm_2min.csv/content",
+      "license": "CC BY 4.0",
+      "download_mode": "script_allowed",
+      "sha256": "c4f8f56fbc4a50e2a1473e0a32d94eaaa49dfab2d019629c9921d1326fdbe3eb",
+      "expected_size_note": "19,506,656-byte CSV verified 2026-07-10",
+      "canonical_coverage": [],
+      "reference_only_fields": ["pm1_ug_m3", "pm25_ug_m3", "pm10_ug_m3", "pm_total_ug_m3"],
+      "explicitly_missing": ["temperature_c", "humidity_pct", "pressure_hpa", "bme_gas_ohm", "co_ppm", "no2_raw_mv", "no2_ratio", "o3_ppm", "co2_ppm", "battery_voltage", "current_ma", "power_mw"],
+      "quality_notes": [
+        "The selected file contains reference-grade Fidas 200S values, not PMS7003T output.",
+        "The adapter keeps PM values under reference.* and leaves project sensor PM fields null.",
+        "Use paired low-cost records and time/site-aware splits for calibration evaluation.",
+        "Do not claim chip-identical or deployed-node performance from this dataset alone."
+      ]
+    },
+    {
+      "id": "senseurcity_multicity_17858205",
+      "name": "SensEURCity multi-city low-cost air-quality dataset",
+      "lane": "multicity_air_quality_research",
+      "landing_url": "https://doi.org/10.5281/zenodo.17858205",
+      "download_url": null,
+      "license": "CC BY 4.0",
+      "download_mode": "manual_only",
+      "expected_size_note": "about 5.7 GB archive; schema sampling and storage approval required",
+      "canonical_coverage": [],
+      "reference_only_fields": [],
+      "explicitly_missing": [],
+      "quality_notes": [
+        "Relevant for multi-city and leave-site-out research, but too large for automatic project download.",
+        "An adapter is intentionally not promoted until the archive schema is sampled and provenance per city/device is confirmed.",
+        "Low-cost systems are not chip-identical to the project RAB sensors.",
+        "Missing project fields must remain null; no cross-dataset fabrication is allowed."
+      ]
+    },
+    {
+      "id": "power_proxy_external",
+      "name": "External battery/power proxy dataset",
+      "lane": "power_proxy_research",
+      "landing_url": null,
+      "download_url": null,
+      "license": null,
+      "download_mode": "blocked_until_selected",
+      "expected_size_note": "not selected",
+      "canonical_coverage": ["battery_voltage", "current_ma", "power_mw"],
+      "reference_only_fields": ["state_of_charge", "state_of_health", "cycle_index"],
+      "explicitly_missing": [],
+      "quality_notes": [
+        "No public battery-aging dataset is promoted as a direct INA226/node battery model yet.",
+        "Different chemistry, load profile, regulator, and sampling make such data proxy-only.",
+        "The production node-health rule remains telemetry/rules-first until project battery traces exist."
+      ]
+    }
+  ]
+}

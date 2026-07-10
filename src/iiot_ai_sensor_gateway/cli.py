@@ -8,11 +8,15 @@ from pathlib import Path
 
 from .adapters.gary_stafford import convert_gary_stafford_csv
 from .adapters.gary_project_schema import derive_gary_project_schema
+from .adapters.bristol_bme680 import adapt_bristol_bme680_csv
+from .adapters.uci_air_quality import adapt_uci_air_quality_csv
+from .adapters.zenodo_pm_reference import adapt_zenodo_pm_reference_csv
 from .config import load_config, load_dotenv
 from .evaluation import evaluate_preprocessing, write_evaluation_report
 from .esp32_sim import simulate_gary_esp32_payloads
 from .features import extract_features
 from .forecasting import (
+    FORECAST_STRATEGIES,
     build_forecast_decision_v1,
     build_forecast_payload_v1,
     evaluate_lstm_forecast,
@@ -23,24 +27,60 @@ from .forecasting import (
     train_lstm_forecast,
 )
 from .normalization import MinMaxNormalizer
+from .edge_forecasting import (
+    MODEL_TYPES,
+    evaluate_edge_forecast,
+    predict_edge_forecast,
+    train_edge_forecast,
+)
 from .parser import PayloadParser
 from .real import FileReplaySource, LiveReceiver, SerialLineSource
 from .real.serial_source import SerialDependencyError
 from .resampling import resample
 from .simulator import SCENARIOS, write_simulation
+from .streaming_detection import RiverDependencyError, run_streaming_detection
 from .validation import ReadingValidator
 from .windowing import WindowBuilder
 
 
+def _parse_string_list(value: str) -> tuple[str, ...]:
+    items = tuple(item.strip() for item in value.split(',') if item.strip())
+    if not items:
+        raise argparse.ArgumentTypeError('expected a comma-separated non-empty list')
+    return items
+
+
 def _parse_int_list(value: str) -> tuple[int, ...]:
     items = tuple(int(item.strip()) for item in value.split(',') if item.strip())
-    if not items:
-        raise argparse.ArgumentTypeError('expected comma-separated integers')
+    if not items or any(item <= 0 for item in items):
+        raise argparse.ArgumentTypeError('expected comma-separated positive integers')
     return items
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError('expected a positive integer')
+    return parsed
+
+
+def _nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError('expected a non-negative integer')
+    return parsed
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError('expected a positive number')
+    return parsed
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='IIoT AI sensor gateway pre-model pipeline')
-    sub = parser.add_subparsers(dest='cmd', required=False)
+    sub = parser.add_subparsers(dest='cmd', required=True)
     run = sub.add_parser('run', help='process canonical JSONL payload input')
     run.add_argument('--config', default='config/default.toml')
     run.add_argument('--input-file', default='data/simulated/payloads.jsonl')
@@ -48,10 +88,26 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument('--max-payloads', type=int, default=0)
     sim = sub.add_parser('simulate', help='generate compact ESP32-C6 payloads')
     sim.add_argument('--scenario', choices=sorted(SCENARIOS), default='mixed')
-    sim.add_argument('--count', type=int, default=120)
-    sim.add_argument('--nodes', type=int, default=2)
-    sim.add_argument('--interval-sec', type=int, default=60)
+    sim.add_argument('--count', type=_positive_int, default=120)
+    sim.add_argument('--nodes', type=_positive_int, default=2)
+    sim.add_argument('--interval-sec', type=_positive_int, default=60)
     sim.add_argument('--output', default='data/simulated/payloads.jsonl')
+    uci = sub.add_parser('adapt-uci-air-quality', help='adapt UCI Air Quality without fabricating project sensor fields')
+    uci.add_argument('--input-csv', required=True)
+    uci.add_argument('--output', default='data/canonical/uci_air_quality.jsonl')
+    uci.add_argument('--timezone', default='Europe/Rome')
+    bristol = sub.add_parser('adapt-bristol-bme680', help='adapt Bristol indoor BME680 long-format CSV')
+    bristol.add_argument('--input-csv', required=True)
+    bristol.add_argument('--output', default='data/canonical/bristol_bme680.jsonl')
+    zenodo_pm = sub.add_parser(
+        'adapt-zenodo-pm-reference',
+        help='adapt Zenodo 7198378 Fidas PM reference data without fabricating PMS7003T fields',
+    )
+    zenodo_pm.add_argument('--input-csv', required=True)
+    zenodo_pm.add_argument(
+        '--output', default='data/canonical/zenodo_fidas_pm_reference.jsonl'
+    )
+    zenodo_pm.add_argument('--timezone', default='UTC')
     gary = sub.add_parser('convert-gary', help='convert Gary Stafford CSV to canonical JSONL')
     gary.add_argument('--input-csv', default='iot_telemetry_data.csv')
     gary.add_argument('--output', default='data/canonical/gary_stafford_canonical.jsonl')
@@ -96,6 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_forecast.add_argument('--seed', type=int, default=42)
     train_forecast.add_argument('--device', default='auto')
     train_forecast.add_argument('--model-version', default='lstm_forecast_v1')
+    train_forecast.add_argument('--forecast-strategy', choices=FORECAST_STRATEGIES, default='absolute')
     eval_forecast = sub.add_parser('evaluate-lstm-forecast', help='evaluate LSTM forecast metrics and baseline')
     eval_forecast.add_argument('--config', default='config/default.toml')
     eval_forecast.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
@@ -126,6 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     experiments.add_argument('--device', default='auto')
     experiments.add_argument('--model-version', default='lstm_forecast_v1')
     experiments.add_argument('--eval-batch-size', type=int, default=1024)
+    experiments.add_argument('--forecast-strategy', choices=FORECAST_STRATEGIES, default='absolute')
     payload = sub.add_parser('build-forecast-payload-v1', help='build decision-layer-ready forecast payload JSONL')
     payload.add_argument('--predictions', default='models/lstm_forecast/latest/predictions.jsonl')
     payload.add_argument('--metrics', default='models/lstm_forecast/latest/metrics.json')
@@ -134,15 +192,58 @@ def build_parser() -> argparse.ArgumentParser:
     decision = sub.add_parser('build-forecast-decision-v1', help='build local rule-based forecast decision JSONL')
     decision.add_argument('--forecast-payloads', default='models/lstm_forecast/latest/forecast_payloads.jsonl')
     decision.add_argument('--output', default='models/lstm_forecast/latest/decision_payloads.jsonl')
+    edge_train = sub.add_parser('train-edge-forecast', help='train FITS-inspired or DLinear edge forecast candidate')
+    edge_train.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
+    edge_train.add_argument('--output-dir', default='models/edge_forecast/latest')
+    edge_train.add_argument('--model-type', choices=MODEL_TYPES, default='fits')
+    edge_train.add_argument('--epochs', type=_positive_int, default=30)
+    edge_train.add_argument('--batch-size', type=_positive_int, default=64)
+    edge_train.add_argument('--learning-rate', type=_positive_float, default=0.001)
+    edge_train.add_argument('--patience', type=_positive_int, default=5)
+    edge_train.add_argument('--seed', type=int, default=42)
+    edge_train.add_argument('--device', default='auto')
+    edge_train.add_argument('--frequency-bins', type=_nonnegative_int, default=0)
+    edge_train.add_argument('--moving-average-kernel', type=_positive_int, default=3)
+    edge_eval = sub.add_parser('evaluate-edge-forecast', help='evaluate edge forecast candidate against LastValue and SeasonalNaive')
+    edge_eval.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
+    edge_eval.add_argument('--model', default='models/edge_forecast/latest/model.pt')
+    edge_eval.add_argument('--output-dir', default=None)
+    edge_eval.add_argument('--seasonal-period', type=_nonnegative_int, default=0)
+    edge_eval.add_argument('--batch-size', type=_positive_int, default=1024)
+    edge_eval.add_argument('--device', default='auto')
+    edge_predict = sub.add_parser('predict-edge-forecast', help='run safe edge forecast inference from a prepared split')
+    edge_predict.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
+    edge_predict.add_argument('--model', default='models/edge_forecast/latest/model.pt')
+    edge_predict.add_argument('--output', default='models/edge_forecast/latest/predictions.jsonl')
+    edge_predict.add_argument('--split', choices=('train', 'val', 'test'), default='test')
+    edge_predict.add_argument('--max-samples', type=_nonnegative_int, default=0)
+    edge_predict.add_argument('--device', default='auto')
+    stream = sub.add_parser('stream-detect', help='run native robust streaming detection or optional River HST+ADWIN')
+    stream.add_argument('--input', required=True)
+    stream.add_argument('--backend', choices=('native', 'river'), default='native')
+    stream.add_argument('--output', default='data/modeling/streaming_detection.jsonl')
+    stream.add_argument('--feature-names', type=_parse_string_list, required=True)
+    stream.add_argument('--warmup-samples', type=_positive_int, default=64)
+    stream.add_argument('--anomaly-threshold', type=float, default=0.7)
+    stream.add_argument('--n-trees', type=_positive_int, default=25)
+    stream.add_argument('--height', type=_positive_int, default=8)
+    stream.add_argument('--window-size', type=_positive_int, default=250)
+    stream.add_argument('--seed', type=int, default=42)
+    stream.add_argument('--adwin-delta', type=_positive_float, default=0.002)
+    stream.add_argument('--z-scale', type=_positive_float, default=3.0)
+    stream.add_argument('--page-hinkley-delta', type=float, default=0.005)
+    stream.add_argument('--page-hinkley-threshold', type=_positive_float, default=0.25)
     selector = sub.add_parser('select-best-forecast-model', help='select a forecast model candidate from experiment summary.csv')
     selector.add_argument('--summary', default='models/forecast_experiments/latest/summary.csv')
     selector.add_argument('--output', default='models/forecast_experiments/latest/best_model_selection.json')
     selector.add_argument('--top-k', type=int, default=5)
-    selector.add_argument('--gas-weight', type=float, default=0.25)
-    selector.add_argument('--co-weight', type=float, default=0.25)
-    selector.add_argument('--temperature-weight', type=float, default=0.15)
-    selector.add_argument('--humidity-weight', type=float, default=0.15)
-    selector.add_argument('--pressure-weight', type=float, default=0.10)
+    selector.add_argument('--co-weight', type=float, default=0.20)
+    selector.add_argument('--o3-weight', type=float, default=0.15)
+    selector.add_argument('--co2-weight', type=float, default=0.15)
+    selector.add_argument('--pm25-weight', type=float, default=0.15)
+    selector.add_argument('--temperature-weight', type=float, default=0.10)
+    selector.add_argument('--humidity-weight', type=float, default=0.08)
+    selector.add_argument('--pressure-weight', type=float, default=0.07)
     selector.add_argument('--overall-weight', type=float, default=0.10)
     selector.add_argument('--require-data-status', default='PASS')
     selector.add_argument('--no-prefer-readiness', action='store_true')
@@ -151,17 +252,30 @@ def build_parser() -> argparse.ArgumentParser:
     receiver_source = receiver.add_mutually_exclusive_group(required=True)
     receiver_source.add_argument('--replay-file', default=None)
     receiver_source.add_argument('--port', default=None)
-    receiver.add_argument('--baudrate', type=int, default=9600)
-    receiver.add_argument('--timeout', type=float, default=1.0)
-    receiver.add_argument('--max-messages', type=int, default=0)
+    receiver.add_argument('--baudrate', type=_positive_int, default=9600)
+    receiver.add_argument('--timeout', type=_positive_float, default=1.0)
+    receiver.add_argument('--max-messages', type=_nonnegative_int, default=0)
     receiver.add_argument('--output-dir', default='data/real_live_logs')
-    sub.add_parser('check-config', help='load config and exit')
+    receiver.add_argument('--rotate-max-bytes', type=_nonnegative_int, default=None)
+    receiver.add_argument('--idle-sleep-sec', type=_positive_float, default=None)
+    receiver.add_argument('--reconnect-initial-sec', type=_positive_float, default=None)
+    receiver.add_argument('--reconnect-max-sec', type=_positive_float, default=None)
+    check = sub.add_parser('check-config', help='load config and exit')
+    check.add_argument('--config', default='config/default.toml')
     return parser
 
 def run_pipeline(args: argparse.Namespace) -> int:
     config = load_config(args.config)
-    parser = PayloadParser(config.identity.gateway_id, config.identity.default_room_id)
-    validator = ReadingValidator(config.validation_ranges, config.pipeline.sequence_gap_warn)
+    parser = PayloadParser(
+        config.identity.gateway_id,
+        config.identity.default_room_id,
+        allow_legacy_v1=config.contract.allow_legacy_v1,
+    )
+    validator = ReadingValidator(
+        config.validation_ranges,
+        config.pipeline.sequence_gap_warn,
+        config.pipeline.validation_state_max_entries,
+    )
     normalizer = MinMaxNormalizer(config.normalization_ranges)
     window_builder = WindowBuilder(config.pipeline.window_size, config.pipeline.window_step)
     output_dir = Path(args.output_dir)
@@ -197,6 +311,20 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.cmd == 'simulate':
         print(write_simulation(args.output, args.scenario, args.count, args.nodes, args.interval_sec))
+        return 0
+    if args.cmd == 'adapt-uci-air-quality':
+        stats = adapt_uci_air_quality_csv(args.input_csv, args.output, timezone_name=args.timezone)
+        print(json.dumps(stats.as_dict(), indent=2))
+        return 0
+    if args.cmd == 'adapt-bristol-bme680':
+        stats = adapt_bristol_bme680_csv(args.input_csv, args.output)
+        print(json.dumps(stats.as_dict(), indent=2))
+        return 0
+    if args.cmd == 'adapt-zenodo-pm-reference':
+        stats = adapt_zenodo_pm_reference_csv(
+            args.input_csv, args.output, timezone_name=args.timezone
+        )
+        print(json.dumps(stats.as_dict(), indent=2))
         return 0
     if args.cmd == 'convert-gary':
         stats = convert_gary_stafford_csv(args.input_csv, args.output)
@@ -257,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
             args.seed,
             args.device,
             args.model_version,
+            args.forecast_strategy,
         )
         print(json.dumps(result, indent=2))
         return 0
@@ -295,6 +424,7 @@ def main(argv: list[str] | None = None) -> int:
             load_config(args.config).normalization_ranges,
             args.model_version,
             args.eval_batch_size,
+            args.forecast_strategy,
         )
         print(json.dumps(result, indent=2))
         return 0
@@ -306,13 +436,76 @@ def main(argv: list[str] | None = None) -> int:
         output = build_forecast_decision_v1(args.forecast_payloads, args.output)
         print(output)
         return 0
+    if args.cmd == 'train-edge-forecast':
+        result = train_edge_forecast(
+            args.dataset,
+            args.output_dir,
+            model_type=args.model_type,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            patience=args.patience,
+            seed=args.seed,
+            device=args.device,
+            frequency_bins=args.frequency_bins,
+            moving_average_kernel=args.moving_average_kernel,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'evaluate-edge-forecast':
+        result = evaluate_edge_forecast(
+            args.dataset,
+            args.model,
+            args.output_dir,
+            seasonal_period=args.seasonal_period,
+            batch_size=args.batch_size,
+            device=args.device,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'predict-edge-forecast':
+        output = predict_edge_forecast(
+            args.dataset,
+            args.model,
+            args.output,
+            split=args.split,
+            max_samples=args.max_samples,
+            device=args.device,
+        )
+        print(output)
+        return 0
+    if args.cmd == 'stream-detect':
+        try:
+            result = run_streaming_detection(
+                args.input,
+                args.output,
+                feature_names=args.feature_names,
+                backend=args.backend,
+                warmup_samples=args.warmup_samples,
+                anomaly_threshold=args.anomaly_threshold,
+                n_trees=args.n_trees,
+                height=args.height,
+                window_size=args.window_size,
+                seed=args.seed,
+                adwin_delta=args.adwin_delta,
+                z_scale=args.z_scale,
+                page_hinkley_delta=args.page_hinkley_delta,
+                page_hinkley_threshold=args.page_hinkley_threshold,
+            )
+        except RiverDependencyError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0
     if args.cmd == 'select-best-forecast-model':
         result = select_best_forecast_model(
             args.summary,
             args.output,
             args.top_k,
-            args.gas_weight,
             args.co_weight,
+            args.o3_weight,
+            args.co2_weight,
+            args.pm25_weight,
             args.temperature_weight,
             args.humidity_weight,
             args.pressure_weight,
@@ -324,22 +517,48 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == 'receive-real-live':
         config = load_config(args.config)
-        payload_parser = PayloadParser(config.identity.gateway_id, config.identity.default_room_id)
-        validator = ReadingValidator(config.validation_ranges, config.pipeline.sequence_gap_warn)
+        payload_parser = PayloadParser(
+            config.identity.gateway_id,
+            config.identity.default_room_id,
+            allow_legacy_v1=config.contract.allow_legacy_v1,
+        )
+        validator = ReadingValidator(
+            config.validation_ranges,
+            config.pipeline.sequence_gap_warn,
+            config.pipeline.validation_state_max_entries,
+        )
         source = (
             FileReplaySource(args.replay_file)
             if args.replay_file
-            else SerialLineSource(args.port, args.baudrate, args.timeout)
+            else SerialLineSource(
+                args.port,
+                args.baudrate,
+                args.timeout,
+                idle_sleep_sec=args.idle_sleep_sec or config.receiver.serial_idle_sleep_sec,
+                reconnect_initial_sec=(
+                    args.reconnect_initial_sec or config.receiver.reconnect_initial_sec
+                ),
+                reconnect_max_sec=args.reconnect_max_sec or config.receiver.reconnect_max_sec,
+            )
         )
         try:
-            summary = LiveReceiver(payload_parser, validator).run(source, args.output_dir, args.max_messages)
+            summary = LiveReceiver(payload_parser, validator).run(
+                source,
+                args.output_dir,
+                args.max_messages,
+                rotate_max_bytes=(
+                    config.receiver.rotate_max_bytes
+                    if args.rotate_max_bytes is None
+                    else args.rotate_max_bytes
+                ),
+            )
         except SerialDependencyError as exc:
             print(str(exc), file=sys.stderr)
             return 2
         print(json.dumps(summary.as_dict(), indent=2))
         return 0
     if args.cmd == 'check-config':
-        load_config()
+        load_config(args.config)
         print('config ok')
         return 0
     return run_pipeline(args)
