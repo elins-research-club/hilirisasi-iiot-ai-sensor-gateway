@@ -1,43 +1,63 @@
+#include <stdio.h>
+
 #include "config.h"
+#include "esp_log.h"
+#include "esp_random.h"
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "lora_e32.h"
 #include "payload.h"
 #include "preprocessing.h"
 #include "sensors.h"
 
-#include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-
 namespace {
-constexpr const char* TAG = "iiot_node";
-
-iiot::SensorReader sensor_reader;
-iiot::Preprocessor preprocessor;
-iiot::PayloadBuilder payload_builder;
-iiot::LoraE32Link lora_link;
-
-unsigned long sequence_number = 0;
-char payload_buffer[320];
+constexpr const char* TAG = "iiot_sensor_node";
 }
 
-extern "C" void app_main(void) {
-  ESP_LOGI(TAG, "IIoT ESP32-C6 sensor node starting");
+extern "C" void app_main() {
+  iiot::SensorReader sensors;
+  iiot::Preprocessor preprocessor;
+  iiot::LoraE32Link link;
 
-  if (!sensor_reader.begin()) {
-    ESP_LOGE(TAG, "sensor init failed");
-  }
-  if (!lora_link.begin()) {
-    ESP_LOGE(TAG, "lora init failed");
-  }
+  const bool sensors_initialized = sensors.begin();
+  bool link_ready = link.begin();
+  ESP_LOGI(TAG, "sensor profile init=%s lora init=%s mock=%d",
+           sensors_initialized ? "ok" : "degraded", link_ready ? "ok" : "failed",
+           IIOT_USE_MOCK_SENSORS);
 
+  char boot_id[17] = {0};
+  const uint64_t random_boot =
+      (static_cast<uint64_t>(esp_random()) << 32) | static_cast<uint64_t>(esp_random());
+  snprintf(boot_id, sizeof(boot_id), "%016llx",
+           static_cast<unsigned long long>(random_boot));
+
+  uint32_t sequence = 0;
   while (true) {
-    iiot::SensorSample raw = sensor_reader.read();
-    iiot::PreprocessedSample processed = preprocessor.process(raw);
-    unsigned long timestamp = static_cast<unsigned long>(xTaskGetTickCount() / configTICK_RATE_HZ);
-    payload_builder.build(payload_buffer, sizeof(payload_buffer), processed, timestamp, sequence_number++);
-
-    ESP_LOGI(TAG, "%s", payload_buffer);
-    lora_link.sendLine(payload_buffer);
+    if (!link_ready) {
+      link_ready = link.begin();
+    }
+    const iiot::SensorSample raw = sensors.read();
+    const iiot::PreprocessedSample processed = preprocessor.process(raw);
+    char payload[1024] = {0};
+    const uint64_t uptime_seconds = static_cast<uint64_t>(esp_timer_get_time() / 1000000ULL);
+    const size_t payload_size =
+        iiot::buildPayload(payload, sizeof(payload), processed, sequence, uptime_seconds, boot_id);
+    if (payload_size == 0) {
+      ESP_LOGE(TAG, "payload encoding failed; event not transmitted");
+    } else if (!link_ready) {
+      ESP_LOGW(TAG, "LoRa unavailable; event seq=%lu not transmitted",
+               static_cast<unsigned long>(sequence));
+    } else if (!link.sendLine(payload)) {
+      ESP_LOGW(TAG, "LoRa transmit failed for seq=%lu",
+               static_cast<unsigned long>(sequence));
+      link_ready = false;
+    } else {
+      ESP_LOGI(TAG, "sent compact-v2 seq=%lu bytes=%u quality=%s",
+               static_cast<unsigned long>(sequence), static_cast<unsigned>(payload_size),
+               processed.quality);
+    }
+    ++sequence;
     vTaskDelay(pdMS_TO_TICKS(iiot::SAMPLE_INTERVAL_MS));
   }
 }

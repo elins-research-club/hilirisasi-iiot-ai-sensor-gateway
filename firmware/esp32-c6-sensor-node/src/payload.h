@@ -1,14 +1,14 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "sensor_types.h"
 
 namespace iiot {
 
-class PayloadBuilder {
- public:
-  size_t build(char* buffer, size_t size, const PreprocessedSample& sample, unsigned long timestamp, unsigned long sequence);
-};
+// Returns encoded byte count, or 0 when the destination is too small/invalid.
+size_t buildPayload(char* output, size_t output_size, const PreprocessedSample& sample,
+                    uint32_t sequence, uint64_t uptime_seconds, const char* boot_id);
 
-}
+}  // namespace iiot
