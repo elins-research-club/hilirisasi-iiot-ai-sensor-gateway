@@ -24,19 +24,32 @@ from iiot_ai_sensor_gateway.windowing import WindowBuilder
 
 class PipelineTests(unittest.TestCase):
     def test_parse_compact_payload(self):
-        parser = PayloadParser('gw_default', 'room_default')
-        reading = parser.parse({'gw': 'gw1', 'n': 'node1', 'r': 'room1', 'ts': '2026-05-29T10:00:00+07:00', 'seq': 7, 's': {'tc': 30.5, 'h': 66, 'co': 0.01}})
+        parser = PayloadParser('gw_default', 'room_default', allow_legacy_v1=False)
+        reading = parser.parse({
+            'v': 2, 'gw': 'gw1', 'n': 'node1', 'r': 'room1',
+            'ts': '2026-05-29T10:00:00+07:00', 'seq': 7, 'bid': 'boot-a',
+            'st': 'ok', 'q': 'valid', 'f': [], 'ok': {'sen0466': 'ok'},
+            's': {'tc': 30.5, 'h': 66, 'co': 2.1},
+        })
         self.assertEqual(reading.gateway_id, 'gw1')
         self.assertEqual(reading.node_id, 'node1')
-        self.assertEqual(reading.sensor.co_raw, 0.01)
+        self.assertEqual(reading.sensor.co_ppm, 2.1)
+        self.assertEqual(reading.compact_version, 2)
 
     def test_parse_esp32_firmware_payload_aliases(self):
-        parser = PayloadParser('gw_default', 'room_default')
-        reading = parser.parse({'n': 'node1', 'r': 'room1', 'ts': '2026-06-03T10:00:00+07:00', 'seq': 1, 'f': 'pressure_unavailable|gas_proxy_from_lpg_smoke', 's': {'tc': 29.2, 'h': 65.4, 'p': 1008.3, 'bme': 18125, 'co': 0.012}})
+        parser = PayloadParser('gw_default', 'room_default', allow_legacy_v1=False)
+        reading = parser.parse({
+            'v': 2, 'n': 'node1', 'r': 'room1',
+            'ts': '2026-06-03T10:00:00+07:00', 'seq': 1, 'bid': 'boot-a',
+            'st': 'degraded', 'q': 'partial',
+            'f': 'pressure_unavailable|co2_missing',
+            'ok': {'bme688': 'ok', 'mhz19': 'missing'},
+            's': {'tc': 29.2, 'h': 65.4, 'p': 1008.3, 'bme': 18125, 'co': 2.2},
+        })
         self.assertEqual(reading.sensor.pressure_hpa, 1008.3)
-        self.assertEqual(reading.sensor.bme_gas_raw, 18125)
-        self.assertEqual(reading.sensor.co_raw, 0.012)
-        self.assertEqual(reading.flags, ('pressure_unavailable', 'gas_proxy_from_lpg_smoke'))
+        self.assertEqual(reading.sensor.bme_gas_ohm, 18125)
+        self.assertEqual(reading.sensor.co_ppm, 2.2)
+        self.assertEqual(reading.flags, ('pressure_unavailable', 'co2_missing'))
     def test_validator_range_and_sequence_gap(self):
         parser = PayloadParser('gw', 'room')
         validator = ReadingValidator({'temperature_c': (-10, 80), 'humidity_pct': (0, 100), 'co_raw': (0, 0.05)})

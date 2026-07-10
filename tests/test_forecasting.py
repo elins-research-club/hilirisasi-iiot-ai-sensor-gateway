@@ -84,8 +84,8 @@ def _write_summary_csv(path: Path) -> None:
         },
     ]
     skills = {
-        'w12_h5_hidden64': [-0.20, -0.30, -0.90, -0.10, -0.45],
-        'w24_h5_hidden128': [-0.05, 0.04, -0.70, -0.20, -0.31],
+        'w12_h5_hidden64': [-0.20, -0.30, -0.90, -0.10, -0.45, -0.25, -0.35],
+        'w24_h5_hidden128': [-0.05, 0.04, -0.70, 0.05, -0.31, 0.02, -0.08],
     }
     for row in rows:
         for target, skill in zip(TARGET_NAMES, skills[row['run_id']], strict=True):
@@ -138,10 +138,10 @@ class ForecastDecisionTests(unittest.TestCase):
                 'model_readiness': 'EXPERIMENTAL',
             }
             rows = [
-                {**base, 'predicted_sensor': {'temperature_c': 30, 'humidity_pct': 60, 'pressure_hpa': 1012, 'bme_gas_raw': 1200, 'co_raw': 0.01}},
-                {**base, 'node_id': 'node-2', 'predicted_sensor': {'temperature_c': 36, 'humidity_pct': 60, 'pressure_hpa': 1012, 'bme_gas_raw': 1200, 'co_raw': 0.01}},
-                {**base, 'node_id': 'node-3', 'predicted_sensor': {'temperature_c': 30, 'humidity_pct': 60, 'pressure_hpa': 1012, 'bme_gas_raw': 3600, 'co_raw': 0.09}},
-                {**base, 'node_id': 'node-4', 'model_readiness': 'NOT_READY', 'predicted_sensor': {'temperature_c': 30, 'humidity_pct': 60, 'pressure_hpa': 1012, 'bme_gas_raw': 1200, 'co_raw': 0.01}},
+                {**base, 'predicted_sensor': {'temperature_c': 30, 'humidity_pct': 60, 'pressure_hpa': 1012, 'co_ppm': 2, 'o3_ppm': 0.03, 'co2_ppm': 650, 'pm25_ug_m3': 12}},
+                {**base, 'node_id': 'node-2', 'predicted_sensor': {'temperature_c': 36, 'humidity_pct': 60, 'pressure_hpa': 1012, 'co_ppm': 2, 'o3_ppm': 0.03, 'co2_ppm': 650, 'pm25_ug_m3': 12}},
+                {**base, 'node_id': 'node-3', 'predicted_sensor': {'temperature_c': 30, 'humidity_pct': 60, 'pressure_hpa': 1012, 'co_ppm': 40, 'o3_ppm': 0.03, 'co2_ppm': 650, 'pm25_ug_m3': 12}},
+                {**base, 'node_id': 'node-4', 'model_readiness': 'NOT_READY', 'predicted_sensor': {'temperature_c': 30, 'humidity_pct': 60, 'pressure_hpa': 1012, 'co_ppm': 2, 'o3_ppm': 0.03, 'co2_ppm': 650, 'pm25_ug_m3': 12}},
             ]
             forecasts.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
 
@@ -152,7 +152,7 @@ class ForecastDecisionTests(unittest.TestCase):
             self.assertEqual(decisions[1]['env_status'], 'warning')
             self.assertEqual(decisions[1]['main_factor'], 'temperature_c')
             self.assertEqual(decisions[2]['env_status'], 'critical')
-            self.assertEqual(decisions[2]['main_factor'], 'co_raw')
+            self.assertEqual(decisions[2]['main_factor'], 'co_ppm')
             self.assertEqual(decisions[3]['env_status'], 'warning')
             self.assertEqual(decisions[3]['main_factor'], 'model_readiness')
             self.assertEqual(decisions[0]['schema'], 'iiot.ai_sensor.forecast_decision.v1')
@@ -184,20 +184,21 @@ class ForecastingTests(unittest.TestCase):
             self.assertTrue(dataset.exists())
             self.assertTrue(meta.exists())
 
-    def test_gas_zero_is_not_treated_as_missing(self):
+    def test_zero_value_is_not_treated_as_missing(self):
         point = ResampledPoint(
             'gw',
             'node-1',
             'room',
             datetime(2026, 6, 1, tzinfo=UTC),
-            SensorValues(voc_raw=0.0, bme_gas_raw=1200.0, co_raw=0.01),
+            SensorValues(co_ppm=0.0, bme_gas_ohm=1200.0),
             1.0,
             0,
             0,
         )
         vector = extract_features([point])[0]
-        self.assertEqual(vector.values['gas_mean_3'], 0.0)
-        self.assertEqual(vector.values['gas_delta'], 0.0)
+        self.assertEqual(vector.values['co_ppm'], 0.0)
+        self.assertEqual(vector.values['has_co_ppm'], 1.0)
+        self.assertEqual(vector.values['co_ppm_delta'], 0.0)
 
     def test_lstm_forward_shape(self):
         import torch

@@ -18,7 +18,11 @@ FIXTURE = ROOT / 'tests' / 'fixtures' / 'real_payload_samples.jsonl'
 
 def _receiver() -> LiveReceiver:
     config = load_config(ROOT / 'config/default.toml')
-    parser = PayloadParser(config.identity.gateway_id, config.identity.default_room_id)
+    parser = PayloadParser(
+        config.identity.gateway_id,
+        config.identity.default_room_id,
+        allow_legacy_v1=False,
+    )
     validator = ReadingValidator(config.validation_ranges, config.pipeline.sequence_gap_warn)
     return LiveReceiver(parser, validator)
 
@@ -36,6 +40,7 @@ class RealLiveReceiverTests(unittest.TestCase):
             accepted = _read_jsonl(output_dir / 'accepted_payloads.jsonl')
             rejected = _read_jsonl(output_dir / 'rejected_payloads.jsonl')
             events = _read_jsonl(output_dir / 'receiver_events.jsonl')
+            raw = _read_jsonl(output_dir / 'raw_envelopes.jsonl')
 
             self.assertEqual(summary.processed_count, 8)
             self.assertEqual(summary.accepted_count, 4)
@@ -44,8 +49,11 @@ class RealLiveReceiverTests(unittest.TestCase):
             self.assertEqual(len(rejected), 4)
             self.assertEqual(events[0]['event'], 'receiver_started')
             self.assertEqual(events[-1]['event'], 'receiver_stopped')
+            self.assertEqual(len(raw), 8)
             self.assertEqual(accepted[0]['source'], 'replay_file')
             self.assertIn('payload_original_compact_json', accepted[0])
+            self.assertIn('canonical', accepted[0])
+            self.assertIn('event_id', accepted[0])
 
     def test_invalid_samples_are_rejected_with_categories(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -58,8 +66,8 @@ class RealLiveReceiverTests(unittest.TestCase):
 
             self.assertEqual(categories, {'validation_error'})
             self.assertIn('sensor_error', issues)
-            self.assertIn('range_co_raw', issues)
-            self.assertIn('range_bme_gas_raw', issues)
+            self.assertIn('range_co_ppm', issues)
+            self.assertIn('range_bme_gas_ohm', issues)
             self.assertIn('missing_node_id', issues)
 
     def test_max_messages_limits_replay_processing(self):
@@ -75,6 +83,37 @@ class RealLiveReceiverTests(unittest.TestCase):
             self.assertEqual(summary.rejected_count, 0)
             self.assertEqual(len(accepted), 2)
             self.assertEqual(rejected, [])
+
+    def test_restart_is_append_only(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            _receiver().run(FileReplaySource(FIXTURE), output_dir, max_messages=2)
+            _receiver().run(FileReplaySource(FIXTURE), output_dir, max_messages=2)
+
+            accepted = _read_jsonl(output_dir / 'accepted_payloads.jsonl')
+            events = _read_jsonl(output_dir / 'receiver_events.jsonl')
+            raw = _read_jsonl(output_dir / 'raw_envelopes.jsonl')
+            self.assertEqual(len(accepted), 4)
+            self.assertEqual(len(events), 4)
+            self.assertEqual(len(raw), 4)
+
+    def test_rotation_happens_during_one_long_run_without_losing_records(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            summary = _receiver().run(
+                FileReplaySource(FIXTURE),
+                output_dir,
+                rotate_max_bytes=700,
+            )
+
+            raw_files = sorted(output_dir.glob('raw_envelopes*.jsonl'))
+            accepted_files = sorted(output_dir.glob('accepted_payloads*.jsonl'))
+            rejected_files = sorted(output_dir.glob('rejected_payloads*.jsonl'))
+            self.assertGreater(len(raw_files), 1)
+            self.assertEqual(sum(len(_read_jsonl(path)) for path in raw_files), 8)
+            self.assertEqual(sum(len(_read_jsonl(path)) for path in accepted_files), 4)
+            self.assertEqual(sum(len(_read_jsonl(path)) for path in rejected_files), 4)
+            self.assertEqual(summary.processed_count, 8)
 
     def test_wrapped_payload_metadata_stays_outside_parser_core(self):
         with tempfile.TemporaryDirectory() as temp_dir:
