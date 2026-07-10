@@ -1,106 +1,52 @@
 # Real Offline File Pipeline
 
-Real offline file pipeline adalah workflow untuk memakai data mentah yang
-dikumpulkan sendiri dari ESP32-C6/Raspberry Pi sebagai bahan preprocessing,
-training, evaluation, dan model selection.
+Real offline capture adalah data hardware nyata yang direkam untuk calibration, replay, debugging, dan modeling tanpa harus terhubung live.
 
-## Tujuan
-
-Workflow ini menjembatani hardware real dan eksperimen model tanpa harus
-menunggu live receiver produksi selesai.
+## Flow
 
 ```text
-ESP32-C6 + BME688/BME668 + SEN0377
--> LoRa/Ebyte E32 atau serial debug
--> Raspberry Pi/laptop capture file
--> raw real JSONL/CSV
--> real file adapter
--> canonical schema
--> shared preprocessing
--> real processed windows
--> real forecast dataset
--> train/evaluate real model
--> model selection report
--> decision threshold validation
+ESP32/radio/serial capture
+-> immutable raw JSONL/binary artifact
+-> checksum + capture metadata
+-> parser/adapter
+-> canonical JSONL
+-> validation/resampling/features/windowing
+-> evaluation
 ```
 
-## Raw Real Dataset
+## Aturan
 
-Raw real dataset harus disimpan apa adanya atau seminimal mungkin berubah.
-Raw berarti belum:
+- raw artifact tidak ditimpa;
+- satu record per line bila JSONL;
+- capture metadata mencatat board/sensor/config/time/site;
+- invalid frame tetap disimpan pada raw lane;
+- canonical output terpisah;
+- missing tetap null;
+- calibration/warm-up state dicatat;
+- artifact besar gitignored.
 
-- dinormalisasi;
-- diresampling;
-- dibuat delta/rolling feature;
-- di-windowing;
-- diisi missing value secara permanen;
-- dipakai sebagai `X/y` model.
+## Replay
 
-Isi raw yang direkomendasikan:
+Gunakan live receiver replay agar raw/accepted/rejected semantics sama dengan runtime:
 
-- `receive_timestamp` dari Raspberry Pi/laptop;
-- `raw_payload` asli jika payload diterima sebagai string;
-- parsed compact payload jika receiver sudah bisa parse JSON;
-- `gateway_id`, `node_id`, `room_id` jika tersedia;
-- `sequence`;
-- `status`, `quality`, `flags`;
-- nilai sensor asli;
-- metadata radio seperti RSSI/SNR jika tersedia.
-
-Folder target:
-
-```text
-data/real_raw/
+```bash
+PY=/home/ubuntu/.hermes/hermes-agent/venv/bin/python3
+$PY run_gateway.py receive-real-live \
+  --replay-file data/real_offline/capture.jsonl \
+  --output-dir data/real_offline/processed
 ```
 
-Folder ini di-ignore dari Git karena berisi data eksperimen/hardware lokal.
+## Dataset Promotion
 
-## Real File Adapter
+Capture baru boleh menjadi modeling lane setelah:
 
-Real file adapter bertugas membaca raw JSONL/CSV dan menulis canonical JSONL.
-Adapter boleh membersihkan format field, tetapi tidak boleh mengubah data mentah
-menjadi feature model.
+- identity dan timestamp review;
+- sensor/unit mapping;
+- missing/error analysis;
+- calibration metadata;
+- time/device/site split plan;
+- privacy/governance review bila ada metadata lokasi.
 
-Output yang disarankan:
+## Belum Ada Klaim
 
-```text
-data/real_canonical/<capture_name>_canonical.jsonl
-```
-
-## Training Dari Data Real Offline
-
-Setelah canonical JSONL terbentuk, workflow memakai shared core yang sama dengan
-simulation/reference pipeline:
-
-```text
-canonical real JSONL
--> run gateway preprocessing
--> LSTM-ready windows
--> prepare forecast dataset
--> train/evaluate model
--> select best model
-```
-
-Training real boleh dijalankan di laptop/server. Raspberry Pi sebaiknya fokus
-untuk capture, preprocessing ringan/gateway, dan inference setelah model cukup
-stabil.
-
-## Validasi Decision Layer
-
-Decision layer v1 yang ada sekarang masih rule-based dan harus dikalibrasi ulang
-dengan data real. Validasi minimal dari real offline file:
-
-- range normal temperature, humidity, pressure, BME gas raw, dan CO;
-- missing rate;
-- sequence gap rate;
-- respons gas/CO terhadap kondisi ruangan;
-- false warning/critical rate pada kondisi normal;
-- target mana yang forecast-nya lebih buruk dari baseline.
-
-## Batasan
-
-- Workflow ini tidak membutuhkan receiver live penuh.
-- Workflow ini belum mengirim MQTT dan belum masuk backend/dashboard.
-- Data real offline adalah bahan training/evaluation, bukan live decision final.
-- Model hasil training real tetap harus dievaluasi terhadap baseline dan
-  didokumentasikan sebelum dipakai inference.
+Repo belum memiliki capture full RAB dari board lapangan pada wave ini. Fixture test bukan real hardware data.

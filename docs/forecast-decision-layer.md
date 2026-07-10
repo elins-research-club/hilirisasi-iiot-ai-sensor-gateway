@@ -1,147 +1,81 @@
-# Forecast Decision Layer v1
+# Forecast dan Decision Layer
 
-## Tujuan
-
-Forecast decision layer v1 mengubah output angka dari `forecast_payload_v1`
-menjadi status lokal yang lebih mudah dibaca:
+Decision layer tidak bergantung pada satu model. Urutan evaluasi:
 
 ```text
-normal | warning | critical
+source/quality validity
+-> sensor rules
+-> battery/node rules
+-> anomaly/drift
+-> forecast candidate
+-> output atau abstain
 ```
 
-Layer ini masih rule-based. Ini belum risk score, belum prescriptive AI final,
-belum MQTT, belum backend/dashboard, dan belum OpenClaw.
-
-## Posisi di Pipeline
-
-```text
-LSTM-ready windows
--> predict-lstm-forecast
--> build-forecast-payload-v1
--> build-forecast-decision-v1
--> decision_payloads.jsonl
-```
-
-Decision layer berjalan setelah forecast payload terbentuk. Inputnya adalah
-prediksi sensor dalam satuan asli, bukan nilai normalized.
-
-## Command
-
-```powershell
-py -3.13 run_gateway.py build-forecast-decision-v1 --forecast-payloads models/lstm_forecast/latest/forecast_payloads.jsonl --output models/lstm_forecast/latest/decision_payloads.jsonl
-```
-
-Output berada di `models/` dan tidak masuk Git.
-
-## Input
-
-Input adalah JSONL dari `build-forecast-payload-v1`. Field penting:
-
-- `gateway_id`, `node_id`, `room_id`
-- `input_start_timestamp`, `input_end_timestamp`
-- `forecast_horizon_minutes`
-- `predicted_sensor`
-- `model_version`, `model_readiness`, `metrics_ref`
-
-`predicted_sensor` dinilai untuk semua target utama:
-
-- `temperature_c`
-- `humidity_pct`
-- `pressure_hpa`
-- `bme_gas_raw`
-- `co_raw`
-
-## Output
-
-Contoh output:
+## Output `sensor_decision.v1`
 
 ```json
 {
-  "schema": "iiot.ai_sensor.forecast_decision.v1",
-  "gateway_id": "gw-test",
-  "node_id": "node-1",
-  "room_id": "room-a",
-  "input_start_timestamp": "2026-06-01T00:00:00+00:00",
-  "input_end_timestamp": "2026-06-01T00:12:00+00:00",
-  "forecast_horizon_minutes": 5,
+  "schema_version": "sensor_decision.v1",
   "env_status": "warning",
-  "main_factor": "co_raw",
-  "reason": "co_raw forecast exceeded warning threshold",
-  "predicted_sensor": {
-    "temperature_c": 31.2,
-    "humidity_pct": 70.5,
-    "pressure_hpa": 1012.8,
-    "bme_gas_raw": 2300,
-    "co_raw": 0.045
-  },
-  "model_version": "lstm_forecast_v1",
+  "main_factor": "co2_ppm",
+  "battery_status": "normal",
+  "node_health": "healthy",
+  "confidence": 0.8,
+  "abstain": false,
+  "reason": "co2_ppm crossed project commissioning threshold",
+  "forecast_status": "available",
   "model_readiness": "EXPERIMENTAL",
-  "metrics_ref": "models/lstm_forecast/latest/metrics.json"
+  "no2_semantics": "ordinal_ratio_only"
 }
 ```
 
-## Rule v1
+## Abstain
 
-Rule mengevaluasi semua sensor target utama:
+Data berikut menghasilkan `env_status=unknown` dan `abstain=true`:
 
-```text
-co_raw >= 0.08               -> critical
-co_raw >= 0.04               -> warning
+- invalid;
+- stale;
+- offline;
+- all-sensor failure;
+- missing identity/contract;
+- model/checkpoint invalid bila model dibutuhkan.
 
-bme_gas_raw >= 3500          -> critical
-bme_gas_raw >= 2500          -> warning
+## Rules
 
-temperature_c >= 38          -> critical
-temperature_c >= 35          -> warning
-temperature_c <= 10          -> warning
+Default code berisi commissioning threshold untuk development/test. Nilai tersebut bukan batas regulasi dan harus dipindahkan ke deployment config setelah review domain.
 
-humidity_pct >= 90           -> critical
-humidity_pct >= 85           -> warning
-humidity_pct <= 25           -> warning
+Field rules saat ini:
 
-pressure_hpa >= 1025         -> warning
-pressure_hpa <= 995          -> warning
+- temperatur;
+- kelembapan;
+- CO;
+- O₃;
+- CO₂;
+- PM2.5;
+- battery voltage;
+- NO₂ ratio ordinal.
 
-model_readiness == NOT_READY -> warning
-```
+## Anomaly dan Drift
 
-Severity dipilih dari rule aktif tertinggi:
+- anomaly score dapat menaikkan warning/critical;
+- drift menghasilkan warning/model-drift factor;
+- drift bukan bukti lingkungan berbahaya;
+- warm-up streaming model harus selesai sebelum alert.
 
-```text
-critical > warning > normal
-```
+## Confidence
 
-Jika beberapa rule aktif pada severity yang sama, `main_factor` dipilih dengan
-prioritas:
+Confidence diturunkan ketika:
 
-```text
-co_raw
-bme_gas_raw
-temperature_c
-humidity_pct
-pressure_hpa
-model_readiness
-```
+- banyak field missing;
+- quality partial/degraded;
+- model belum promising/validated.
 
-CO dan gas tetap menjadi prioritas karena paling dekat dengan risiko udara.
-Temperature, humidity, dan pressure tetap dipakai agar semua target utama ikut
-dinilai.
+Confidence bukan probabilitas terkalibrasi sebelum calibration study dilakukan.
 
-## Kenapa Belum Risk Score
+## Main Factor
 
-Risk score butuh bobot risiko yang valid. Pada tahap ini bobot tersebut belum
-tervalidasi dengan data sensor real. Rule-based v1 lebih mudah diaudit: setiap
-status punya alasan yang eksplisit.
+Priority risk factor mengikuti canonical field. Legacy proxy tidak digunakan sebagai production factor.
 
-Setelah data real tersedia, rule ini bisa dievaluasi ulang dan dinaikkan menjadi
-risk score atau prescriptive decision layer.
+## Integrasi
 
-## Batasan
-
-- Threshold v1 masih konservatif dan harus divalidasi ulang dengan sensor real.
-- `pressure_hpa` pada dataset derived masih synthetic, jadi belum dibuat rule
-  critical.
-- `bme_gas_raw` pada dataset Gary derived masih proxy, bukan BME688/BME668 real.
-- Output ini belum dikirim ke MQTT dan belum dipakai dashboard.
-- OpenClaw tetap hanya untuk notifikasi/report/summary setelah backend siap,
-  bukan inference realtime.
+Decision output dapat dipetakan ke `sensor_ai.v1.ai`, tetapi event builder default tetap abstain sampai decision aktual disediakan.

@@ -1,5 +1,7 @@
 # Progress Gary Stafford Preprocessing
 
+> **Historical v1 evidence.** Gary tetap regression/reference lane. Field proxy lama dan hasil sintetis di dokumen ini tidak boleh dipakai sebagai sensor RAB canonical atau klaim performa perangkat.
+
 ## Tujuan
 
 Laporan ini mencatat progres uji awal pipeline AI sensor pre-model memakai dataset publik Gary Stafford. Targetnya bukan melatih model LSTM, tetapi memastikan data publik dapat dikonversi ke canonical JSONL, diproses, dinormalisasi, dan di-window menjadi input LSTM-ready.
@@ -11,7 +13,7 @@ Catatan terbaru: untuk simulasi yang lebih dekat ke hardware, gunakan laporan `d
 Schema lingkungan ideal project memakai:
 
 - BME688/BME668 untuk temperature, humidity, pressure, dan BME gas raw/gas resistance style signal.
-- SEN0377 untuk CO/gas tambahan.
+- Target CO aktual adalah SEN0466; dataset Gary hanya menyediakan proxy CO generik.
 
 Gary dipakai sebagai uji awal karena memiliki temperature, humidity, CO, LPG, dan smoke. Gary tidak merepresentasikan sensor final 1:1 karena tidak punya pressure_hpa dan tidak punya BME gas raw asli. Namun, LPG dan smoke adalah gas-like feature yang bisa dipakai sebagai proxy awal untuk menguji pipeline gas.
 
@@ -21,7 +23,7 @@ Gary dipakai sebagai uji awal karena memiliki temperature, humidity, CO, LPG, da
 - device menjadi node_id.
 - temp menjadi temperature_c.
 - humidity menjadi humidity_pct.
-- co menjadi co_raw atau SEN0377-like CO feature.
+- co menjadi generic CO proxy pada field legacy `co_raw`.
 - lpg dan smoke menjadi gas proxy untuk bme_gas_raw/gas_raw.
 - pressure_hpa unavailable karena Gary tidak punya pressure.
 - BME gas raw asli dari sensor Bosch tidak tersedia; LPG/smoke hanya proxy.
@@ -80,7 +82,7 @@ Pipeline pre-model berhasil memproses dataset Gary menjadi window LSTM-ready tan
 - Tidak ada pressure_hpa.
 - Tidak ada BME gas raw asli dari sensor Bosch.
 - LPG dan smoke hanya gas proxy awal, bukan pengganti penuh BME gas raw dari sensor real.
-- CO tersedia dan dipakai sebagai SEN0377-like feature, tetapi skala dan karakteristiknya tetap perlu divalidasi terhadap sensor real.
+- CO tersedia sebagai proxy generik, tetapi skala dan karakteristiknya tetap perlu divalidasi terhadap SEN0466 real.
 - Dataset publik ini hanya uji awal pipeline, bukan representasi final sensor project.
 
 ## Rencana Lanjut

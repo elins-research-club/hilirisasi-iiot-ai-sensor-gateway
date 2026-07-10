@@ -1,67 +1,123 @@
-# Deployment Raspberry Pi
+# Deployment Raspberry Pi — Sensor Gateway
 
-## Paket Sistem
+Dokumen ini adalah contoh deployment, bukan bukti production readiness.
+
+## Prasyarat
+
+- Raspberry Pi OS 64-bit;
+- Python environment proyek;
+- serial device/group permission;
+- config explicit;
+- writable state directory;
+- E32/receiver hardware bila live mode.
+
+Dependency commands hanya dijalankan user setelah review:
 
 ```bash
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip git
+python -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install -e '.[serial]'
 ```
 
-## Setup Project
+ML optional:
 
 ```bash
-git clone <repo-url> iiot-ai-sensor-gateway
-cd iiot-ai-sensor-gateway
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e .[dev]
-cp .env.example .env
-python run_gateway.py check-config
+.venv/bin/python -m pip install -e '.[ml]'
+.venv/bin/python -m pip install -e '.[streaming]'
 ```
 
-Untuk serial LoRa/UART, install dependency opsional:
+## Preflight
 
 ```bash
-python -m pip install -e ".[serial]"
+.venv/bin/python run_gateway.py check-config --config config/default.toml
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py' -q
 ```
 
-## Manual Run
+Serial discovery/permission harus diverifikasi terhadap device aktual. Jangan hardcode `/dev/ttyUSB0` tanpa pemeriksaan.
 
-Simulasi dan preprocessing lokal:
+## Manual Live Run
 
 ```bash
-python run_gateway.py simulate --scenario mixed --count 120 --nodes 2
-python run_gateway.py run --input-file data/simulated/payloads.jsonl --output-dir data/processed
+IIOT_CONFIG_FILE=/home/pi/iiot-ai-sensor-gateway/config/default.toml \
+.venv/bin/python run_gateway.py receive-real-live \
+  --port /dev/ttyUSB0 \
+  --baudrate 9600 \
+  --output-dir /var/lib/iiot-ai-sensor-gateway/real_live_logs
 ```
 
-Replay receiver live tanpa hardware:
+Receiver menulis append-only audit trail.
+
+## Systemd Example
+
+Unit: `systemd/iiot-ai-sensor-gateway.service`.
+
+Karakteristik:
+
+- live serial command;
+- `Restart=on-failure`;
+- restart delay dan rate limit;
+- config/env explicit;
+- state path writable;
+- filesystem hardening dasar.
+
+Sebelum install:
+
+1. sesuaikan user/group/path;
+2. buat state directory dengan owner service;
+3. set serial group/udev;
+4. periksa environment file;
+5. run manual dahulu;
+6. baru copy/enable unit.
+
+Contoh command deployment tidak dijalankan otomatis oleh agent:
 
 ```bash
-python run_gateway.py receive-real-live --replay-file tests/fixtures/real_payload_samples.jsonl --output-dir data/real_live_logs --max-messages 10
-```
-
-Receiver serial skeleton untuk LoRa transparent UART:
-
-```bash
-python run_gateway.py receive-real-live --port /dev/serial0 --baudrate 9600 --timeout 1.0 --output-dir data/real_live_logs
-```
-
-## Systemd
-
-Salin `systemd/iiot-ai-sensor-gateway.service` ke `/etc/systemd/system/`, lalu
-sesuaikan `WorkingDirectory`, `User`, dan path virtualenv.
-
-```bash
+sudo install -d -o pi -g pi -m 0750 /var/lib/iiot-ai-sensor-gateway
+sudo install -m 0644 systemd/iiot-ai-sensor-gateway.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable iiot-ai-sensor-gateway
-sudo systemctl start iiot-ai-sensor-gateway
-sudo journalctl -u iiot-ai-sensor-gateway -f
+sudo systemctl enable --now iiot-ai-sensor-gateway.service
 ```
 
-## Catatan Performa
+## MQTT
 
-- Interval inference/model berikutnya tidak perlu realtime tinggi; window 1
-  menit x 12 timestep cukup untuk awal.
-- Simpan log JSONL dengan rotasi di deployment produksi.
-- Receiver v0 hanya skeleton logging/validasi; konfigurasi Ebyte E32/E22, pin,
-  channel, dan reconnect kompleks perlu disesuaikan saat hardware real siap.
+Repo saat ini belum menjalankan production publisher. Sebelum menambah MQTT service, wajib ada:
+
+- TLS/credential source yang aman;
+- QoS/retain policy;
+- LWT status sensor;
+- event spool/outbox bounded;
+- status tidak masuk outbox;
+- topic ACL;
+- schema validation;
+- dedupe event ID;
+- reconnect/soak test.
+
+## Model Deployment
+
+Model tidak menjadi service default. Promotion memerlukan:
+
+- baseline gate;
+- real-data evaluation;
+- safe checkpoint;
+- versioned artifact;
+- Pi latency/RSS measurement;
+- fallback rules/baseline;
+- rollback.
+
+## Rollback
+
+- stop/disable unit baru;
+- restore previous unit/config backup;
+- preserve append-only data directory;
+- jangan hapus raw capture atau model artifact tanpa backup;
+- verify manual replay before restarting live.
+
+## Belum Diverifikasi
+
+- exact Pi model/OS;
+- serial device path;
+- E32 transport;
+- production MQTT;
+- sensor hardware;
+- Pi resource metrics;
+- long soak/power-loss recovery.

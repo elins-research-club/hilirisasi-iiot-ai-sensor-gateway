@@ -1,81 +1,85 @@
 # Preprocessing ESP32-C6
 
-Dokumen ini menjelaskan preprocessing ringan di node ESP32-C6. Ini berbeda dari preprocessing AI/pre-model di Raspberry Pi.
+## Tujuan
 
-## Peran ESP32-C6
+ESP32-C6 mengurangi noise dan membawa status sensor tanpa menghilangkan data penting. Preprocessing device tetap ringan dan deterministik.
 
-ESP32-C6 bertugas:
+## Langkah
 
-- membaca BME688/BME668;
-- membaca SEN0377;
-- melakukan validasi awal;
-- melakukan smoothing ringan jika diperlukan;
-- membuat payload compact;
-- mengirim payload melalui LoRa/Ebyte E32.
+1. `SensorReader` membaca setiap lane.
+2. Nilai tidak tersedia tetap NaN internal.
+3. `Preprocessor` memeriksa sanity range per sensor.
+4. Nilai valid masuk moving average lima sampel.
+5. Status per sensor disimpan.
+6. Global status menjadi `ok`, `degraded`, atau `sensor_error`.
+7. Encoder mengubah NaN menjadi JSON `null`.
+8. Payload truncation membatalkan transmit.
 
-ESP32-C6 tidak menjalankan LSTM, anomaly detection, forecasting, MQTT broker, backend, dashboard, atau OpenClaw.
+## Field dan Range Host-Contract
 
-## Sensor Target
+| Field | Sanity range |
+|---|---|
+| temperatur | -10–80 °C |
+| kelembapan | 0–100 % |
+| tekanan | 800–1200 hPa |
+| BME gas | 100–10,000,000 ohm |
+| CO | 0–1000 ppm |
+| NO₂ mV | 0–3300 mV |
+| NO₂ ratio | 0–20 bila tersedia |
+| O₃ | 0–10 ppm |
+| CO₂ | 0–10,000 ppm |
+| PM | 0–5000 µg/m³ |
+| voltage | 0–60 V |
+| current | -20,000–20,000 mA |
+| power | -1,000,000–1,000,000 mW |
 
-- BME688/BME668: temperature, humidity, pressure, dan BME gas raw/gas resistance style signal.
-- SEN0377: CO/gas tambahan.
+Range ini adalah sanity gate, bukan regulatory alert threshold.
 
-## Aturan Preprocessing Ringan
+## Partial Validity
 
-- Range check suhu, humidity, pressure, BME gas raw, dan CO raw.
-- Missing check untuk field wajib: node_id, room_id, timestamp/uptime, sequence, temperature, humidity, pressure, BME gas, dan CO.
-- Sensor error flag jika pembacaan gagal atau nilai tidak masuk akal.
-- Moving average ringan 3 sampai 5 sampel jika noise terlalu besar.
-- Pembulatan nilai agar payload LoRa kecil.
-- Sequence monoton per node agar Raspberry Pi bisa mendeteksi packet loss.
-- Status dan quality dikirim bersama payload.
+Satu sensor gagal tidak memaksa semua field menjadi invalid. Contoh:
 
-## Payload Compact ESP32-C6
-
-Contoh payload:
-
-```json
-{"v":1,"n":"node_01","r":"room_A","ts":42,"seq":7,"st":"ok","q":"valid","f":"","s":{"tc":29.20,"h":65.40,"p":1008.30,"bme":18125.00,"co":0.01200}}
+```text
+BME688 valid
+CO valid
+O3 unavailable
+-> st=degraded
+-> q=partial
+-> o3=null
+-> flag o3_invalid
 ```
 
-Alias field:
+## NO₂
 
-- `v`: schema version.
-- `n`: node_id.
-- `r`: room_id.
-- `ts`: timestamp atau uptime seconds jika RTC belum tersedia.
-- `seq`: sequence number.
-- `st`: status, contoh `ok` atau `sensor_error`.
-- `q`: quality, contoh `valid` atau `invalid`.
-- `f`: flags, dipisahkan `|` jika lebih dari satu.
-- `s.tc`: temperature_c.
-- `s.h`: humidity_pct.
-- `s.p`: pressure_hpa.
-- `s.bme`: bme_gas_raw.
-- `s.co`: co_raw.
+Firmware menghasilkan ADC mV. Rasio hanya tersedia setelah baseline commissioning. Tidak ada conversion ke ppm pada firmware foundation.
+
+## INA226
+
+Firmware memiliki register path, tetapi current LSB masih commissioning default. Nilai produksi menunggu shunt resistor aktual dan cross-check alat referensi.
+
+## Mock vs Hardware
+
+Mock:
+
+- seluruh field valid;
+- deterministic variation;
+- dipakai CI/end-to-end contract.
+
+Hardware:
+
+- SEN0466, SEN0574, SEN0321, INA226, SC16IS752, MH-Z19, PMS7003T, dan E32 memiliki read/transport path yang fail-closed;
+- MH-Z19/PMS menandai warm-up secara eksplisit dan tetap `null` sampai siap;
+- BME688 memiliki adapter Bosch SensorAPI; profile resmi compile-validated, sedangkan default tetap disabled bila dependency lokal tidak tersedia;
+- seluruh jalur baru compile-tested, belum hardware-verified;
+- tidak ada placeholder yang dipromosikan sebagai pembacaan real.
 
 ## Batasan
 
-Preprocessing ESP32 hanya menjaga kualitas payload awal. Raspberry Pi tetap wajib melakukan validasi lanjutan, logging, resampling, feature extraction, normalisasi, windowing, dan AI inference.
+Moving average tidak menggantikan:
 
-## Simulator Gary ESP32-Like
-
-Untuk menguji jalur dari awal tanpa hardware, repo menyediakan simulator Python yang meniru preprocessing ringan ESP32-C6 pada dataset Gary:
-
-- membaca baris CSV sebagai pembacaan sensor;
-- mapping `temp`, `humidity`, `co`, `lpg`, dan `smoke`;
-- membuat gas proxy `bme_gas_raw` dari rata-rata LPG/smoke;
-- melakukan range check dan missing check;
-- menerapkan moving average 3 sampel per device;
-- membuat sequence number per device;
-- mengirim compact payload. Pada simulator Gary lama, flag dapat berisi `pressure_unavailable` dan `gas_proxy_from_lpg_smoke` karena dataset asli tidak punya pressure.
-
-Command:
-
-```powershell
-py -3.13 run_gateway.py simulate-gary-esp32 --input-csv iot_telemetry_data.csv --output data/simulated/gary_esp32_lora_payloads.jsonl
-```
-
-Simulator ini hanya untuk laptop/testing. Implementasi hardware tetap berada di firmware C++ folder `firmware/esp32-c6-sensor-node/`.
-
-Untuk belajar dengan kolom yang sudah disesuaikan dengan sensor project, gunakan workflow `derive-gary-schema` di README. Workflow itu membuat `pressure_hpa` synthetic realistis dan `bme_gas_raw` turunan dari LPG/smoke sebelum payload masuk ke pipeline Raspberry Pi.
+- kalibrasi;
+- warm-up state;
+- compensation model;
+- outlier handling gateway;
+- resampling/time alignment;
+- model AI.

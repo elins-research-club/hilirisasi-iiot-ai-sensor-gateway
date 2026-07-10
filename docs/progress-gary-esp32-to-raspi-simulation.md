@@ -1,5 +1,7 @@
 # Progress Gary ESP32-Like ke Raspberry Pi Preprocessing
 
+> **Historical v1 evidence.** Isi ini mendokumentasikan simulasi proxy lama, bukan firmware atau contract aktif. Gunakan `compact_sensor.v2`, `data-contract.md`, dan laporan foundation 2026-07-10 untuk implementasi saat ini.
+
 ## Tujuan
 
 Laporan ini mencatat progres simulasi end-to-end AI sensor pre-model memakai dataset publik Gary Stafford. Targetnya adalah memastikan alur dari pembacaan sensor simulatif, preprocessing ringan ESP32-C6, payload compact LoRa, sampai pipeline Raspberry Pi dapat menghasilkan window siap LSTM.
@@ -26,7 +28,7 @@ Mapping yang dipakai:
 - `device` menjadi node_id.
 - `temp` menjadi `temperature_c`.
 - `humidity` menjadi `humidity_pct`.
-- `co` menjadi `co_raw` atau fitur SEN0377-like.
+- `co` menjadi generic CO proxy pada field legacy `co_raw`; bukan representasi chip SEN0466.
 - `lpg` dan `smoke` menjadi gas proxy untuk `bme_gas_raw`.
 - `pressure_hpa` unavailable karena Gary tidak punya pressure.
 - Gary asli tidak memiliki BME gas raw dari sensor Bosch; LPG/smoke hanya dipakai sebagai gas-like proxy.
@@ -110,13 +112,13 @@ Dengan hasil ini, output sudah siap untuk uji awal model time-series sebagai `RE
 - Tidak ada `pressure_hpa`.
 - Tidak ada BME gas raw asli dari sensor Bosch.
 - LPG/smoke adalah gas-like proxy, bukan pengganti penuh BME gas raw dari sensor real.
-- CO tersedia sebagai SEN0377-like, tetapi skala sensor real tetap harus dikalibrasi.
+- CO tersedia sebagai proxy generik, tetapi skala/karakteristik SEN0466 real tetap harus divalidasi.
 - Dataset publik Gary tidak merepresentasikan wiring, noise, latency, RSSI, packet loss LoRa, atau kondisi sensor real.
 
 ## Rencana Lanjut
 
 - Integrasikan receiver LoRa real di Raspberry Pi agar payload ESP32-C6 real bisa masuk ke parser yang sama.
-- Lengkapi firmware ESP32-C6 dengan driver BME688/BME668 dan SEN0377 real.
+- Lengkapi firmware ESP32-C6 dengan driver BME688, SEN0466, SEN0574, SEN0321, CO₂, PM, dan INA226 setelah kontrak/pin/bus final.
 - Pakai Bristol sebagai dataset utama berikutnya karena lebih dekat ke BME688-like multi-device indoor sensor dengan temperature, humidity, pressure, gas, dan RSSI.
 - Pakai GAMS/AQUAIR sebagai referensi lanjutan VOC/IAQ.
 - Setelah data real cukup, latih baseline anomaly/forecasting sebelum implementasi LSTM penuh.

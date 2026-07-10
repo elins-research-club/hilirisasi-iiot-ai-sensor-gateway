@@ -1,5 +1,7 @@
 # Progress Gary Derived Project Sensor Schema
 
+> **Historical v1 evidence.** Dokumen ini mempertahankan workflow proxy/sintetis lama untuk reproduksi eksperimen. Kontrak aktif adalah `compact_sensor.v2` dan `sensor_ai.v1`; lihat `data-contract.md`. Jangan gunakan hasil derived Gary sebagai bukti sensor RAB atau performa lapangan.
+
 ## Tujuan
 
 Dokumen ini mencatat pembuatan dataset turunan dari Gary Stafford agar kolomnya lebih mudah dipahami dan lebih dekat dengan target sensor project. Dataset Gary asli tidak diubah.
@@ -80,5 +82,5 @@ Dataset ini boleh dipakai untuk simulasi pipeline, debugging, dan uji awal LSTM 
 
 - Gunakan dataset turunan ini sebagai jalur belajar utama.
 - Tetap simpan jalur Gary asli sebagai referensi parsial.
-- Integrasikan data real BME688/BME668 dan SEN0377 ketika hardware siap.
+- Integrasikan data real BME688, SEN0466, SEN0574, SEN0321, CO₂, PM, dan INA226 ketika hardware siap.
 - Dataset Bristol tetap menjadi kandidat berikutnya karena lebih dekat ke multi-device indoor sensor dengan pressure dan gas signal.

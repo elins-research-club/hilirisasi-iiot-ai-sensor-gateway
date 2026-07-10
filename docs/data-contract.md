@@ -1,142 +1,217 @@
-# Data Contract dan Payload
+# Kontrak Data Node Sensor
 
-## Tujuan
+Dokumen ini adalah sumber kontrak aktif untuk firmware, receiver Python, payload AI sensor, dan status sensor.
 
-Data contract menyambungkan dua layer:
+## 1. Compact Sensor v2 — ESP32-C6 ke Gateway
 
-- ESP32-C6 firmware mengirim compact payload melalui LoRa.
-- Raspberry Pi Python pipeline mengubah payload menjadi canonical internal, lalu melakukan preprocessing AI/pre-model.
+Schema: `schemas/compact_sensor.v2.schema.json`.
 
-## Compact Payload ESP32-C6
+Top-level:
 
-Contoh payload firmware:
+| Field | Arti |
+|---|---|
+| `v` | versi compact, wajib `2` |
+| `gw` | gateway target/identity bila tersedia |
+| `n` | node ID |
+| `r` | room ID |
+| `ts` | uptime node atau waktu absolut |
+| `seq` | sequence per boot |
+| `bid` | boot ID baru tiap reboot |
+| `st` | `ok`, `degraded`, atau `sensor_error` |
+| `q` | `valid`, `partial`, atau `invalid` |
+| `f` | flags string dipisah `|` atau array string |
+| `ok` | status per sensor |
+| `radio` / `lora` | metadata inline opsional `rssi`/`snr`; wrapper-level `radio` lebih disarankan |
+| `s` | object pembacaan sensor |
 
-```json
-{"v":1,"n":"node_01","r":"room_A","ts":42,"seq":7,"st":"ok","q":"valid","f":"","s":{"tc":29.20,"h":65.40,"p":1008.30,"bme":18125.00,"co":0.01200}}
-```
+Field sensor:
 
-Alias field:
+| Compact | Canonical | Semantik |
+|---|---|---|
+| `tc` | `temperature_c` | °C |
+| `h` | `humidity_pct` | %RH |
+| `p` | `pressure_hpa` | hPa |
+| `bme` | `bme_gas_ohm` | gas resistance BME688, ohm |
+| `co` | `co_ppm` | CO SEN0466, ppm |
+| `n2mv` | `no2_raw_mv` | tegangan NO₂ SEN0574, mV |
+| `n2r` | `no2_ratio` | rasio kualitatif terhadap baseline |
+| `o3` | `o3_ppm` | O₃, ppm |
+| `co2` | `co2_ppm` | CO₂, ppm |
+| `pm1` | `pm1_ug_m3` | µg/m³ |
+| `pm25` | `pm25_ug_m3` | µg/m³ |
+| `pm10` | `pm10_ug_m3` | µg/m³ |
+| `bv` | `battery_voltage` | V |
+| `bi` | `current_ma` | mA |
+| `bp` | `power_mw` | mW |
 
-- `v`: schema version.
-- `n`: node_id.
-- `r`: room_id.
-- `ts`: timestamp atau uptime seconds. Jika ESP32 belum punya RTC/NTP, Raspberry Pi receiver sebaiknya mengganti/menambah receive_timestamp saat payload diterima.
-- `seq`: sequence number.
-- `st`: status, contoh `ok` atau `sensor_error`.
-- `q`: quality, contoh `valid` atau `invalid`.
-- `f`: flags, dipisahkan `|` jika lebih dari satu.
-- `s.tc`: temperature_c.
-- `s.h`: humidity_pct.
-- `s.p`: pressure_hpa.
-- `s.bme`: bme_gas_raw.
-- `s.co`: co_raw.
+Aturan:
 
-## Canonical Internal Raspberry Pi
+- missing ditulis `null`;
+- nol hanya berarti pengukuran nol yang valid;
+- NO₂ tidak boleh dipromosikan menjadi ppm tanpa kalibrasi referensi;
+- status sensor parsial boleh diteruskan;
+- versi lain, bool sebagai angka, NaN/Inf, boot ID kosong, atau sequence negatif ditolak;
+- compact v1 hanya migration/reference dan dapat dimatikan.
 
-Raspberry Pi menyamakan payload menjadi field canonical:
+## 2. Time Policy
 
-- gateway_id atau gw.
-- node_id atau n.
-- room_id atau r.
-- timestamp atau ts.
-- sequence atau seq.
-- status atau st.
-- quality atau q.
-- flags atau f.
-- sensor.temperature_c.
-- sensor.humidity_pct.
-- sensor.pressure_hpa.
-- sensor.bme_gas_raw.
-- sensor.co_raw.
-- sensor.gas_raw.
+`ts` numeric kecil dari firmware adalah uptime, bukan Unix epoch. Gateway membentuk:
 
-## Mapping Sensor Target
+- `timestamp`: waktu authoritative untuk event;
+- `source.node_timestamp`: nilai asli node;
+- `source.receive_timestamp`: waktu gateway menerima frame;
+- `source.time_quality`:
+  - `gateway_received` bila node memberi uptime/tidak punya waktu absolut;
+  - `node_epoch` bila node memberi epoch valid;
+  - `node_synced` bila node memberi waktu ISO/RFC3339 valid.
 
-- BME688/BME668: temperature_c, humidity_pct, pressure_hpa, bme_gas_raw/gas resistance style signal.
-- SEN0377: co_raw.
+Gateway tidak boleh mengubah uptime 77 detik menjadi tanggal 1970.
 
-Catatan: VOC/IAQ bukan field mentah utama. Jika nanti memakai BSEC atau model tambahan, VOC/IAQ sebaiknya menjadi output olahan seperti `iaq_score` atau `gas_risk_score`, bukan pengganti `bme_gas_raw`.
+## 3. Identity, Retry, dan Reboot
 
-## Mapping Gary Stafford
-
-Gary dipakai sebagai uji awal pipeline, bukan representasi final 1:1.
-
-- temp menjadi temperature_c.
-- humidity menjadi humidity_pct.
-- co menjadi co_raw atau SEN0377-like CO feature.
-- lpg dan smoke menjadi gas proxy awal untuk bme_gas_raw.
-- pressure_hpa unavailable karena Gary tidak punya pressure.
-- light dan motion menjadi metadata/ignored columns dan tidak masuk fitur utama default.
-
-## Dataset Turunan Gary Project Schema
-
-Workflow terbaru membuat dataset baru yang kolomnya disesuaikan dengan sensor project, tanpa mengubah CSV Gary asli:
-
-```powershell
-py -3.13 run_gateway.py derive-gary-schema --input-csv iot_telemetry_data.csv --output-csv data/derived/gary_project_sensor_schema.csv --output-jsonl data/derived/gary_project_sensor_schema.jsonl --output-payloads data/derived/gary_project_sensor_payloads.jsonl
-```
-
-CSV turunan:
+Event ID diturunkan secara deterministik dari:
 
 ```text
-timestamp,node_id,sequence,temperature_c,humidity_pct,pressure_hpa,bme_gas_raw,co_raw
+gateway_id + node_id + boot_id + sequence + node_timestamp + sensor data
 ```
 
-Aturan derivasi:
+Konsekuensi:
 
-- `pressure_hpa` dibuat synthetic karena Gary tidak punya pressure asli. Mode
-  default `smooth` mempertahankan tren barometrik halus sekitar 1008-1014 hPa.
-  Untuk eksperimen model, mode `dynamic` dapat dipakai agar pressure punya
-  variasi cuaca/indoor/noise deterministik yang lebih realistis dan tidak
-  terlalu menguntungkan baseline last-value.
-- `bme_gas_raw` dibuat dari kombinasi LPG/smoke Gary, lalu diskalakan ke rentang 500-4500 agar cocok dengan normalisasi pipeline.
-- `light` dan `motion` dibuang dari schema utama.
-- Data turunan ini untuk belajar, simulasi pipeline, dan validasi bentuk data. Data real sensor tetap menjadi sumber kebenaran final.
+- retry frame yang sama menghasilkan `event_id` sama;
+- reboot membentuk `boot_id` baru;
+- sequence boleh kembali ke nol setelah reboot;
+- duplicate dalam boot yang sama ditolak;
+- sequence lebih kecil dalam boot yang sama ditolak;
+- sequence gap diterima dengan issue observability.
 
-## Simulasi Gary ke Payload ESP32-C6
+## 4. Canonical Internal Record
 
-Untuk simulasi end-to-end di laptop, Gary diproses dulu oleh simulator
-ESP32-like sebelum masuk pipeline Raspberry Pi:
+Parser menghasilkan `SensorReading` dengan:
 
-```powershell
-py -3.13 run_gateway.py simulate-gary-esp32 --input-csv iot_telemetry_data.csv --output data/simulated/gary_esp32_lora_payloads.jsonl
+```text
+schema_version,event_id,gateway_id,node_id,room_id,timestamp,
+receive_timestamp,node_timestamp,time_quality,boot_id,sequence,
+status,quality,flags,sensor_status,radio,source,sensor
 ```
 
-Outputnya memakai compact payload yang sama dengan arah firmware:
+Canonical record hanya menyatukan nama dan unit. Ia tidak mengisi field yang tidak ada.
+
+Field lama seperti proxy gas Gary tetap berada di lane migration/reference dan tidak disamakan dengan sensor RAB.
+
+## 5. `sensor_ai.v1`
+
+Schema: `schemas/sensor_ai.v1.schema.json`.
+
+Payload target ke topic data:
 
 ```json
-{"v":1,"n":"00:0f:00:70:91:0a","r":"gary_public","ts":"2020-07-12T00:01:34.385975+00:00","seq":0,"st":"ok","q":"valid","f":"pressure_unavailable|voc_not_native|gas_proxy_from_lpg_smoke","s":{"tc":25.0,"h":60.0,"bme":0.015,"co":0.01}}
+{
+  "schema_version": "sensor_ai.v1",
+  "event_id": "se_...",
+  "gateway_id": "raspi_gateway_01",
+  "node_id": "esp32c6_node_01",
+  "room_id": "room_A",
+  "timestamp": "2026-07-10T06:00:00+00:00",
+  "source": {
+    "compact_version": 2,
+    "boot_id": "boot-a",
+    "sequence": 10,
+    "node_timestamp": 77,
+    "receive_timestamp": "2026-07-10T06:00:00+00:00",
+    "time_quality": "gateway_received",
+    "transport": "lora_serial",
+    "radio": {"rssi": null, "snr": null},
+    "sensor_status": {"bme688": "ok"},
+    "flags": []
+  },
+  "sensor": {
+    "temperature_c": 28.1,
+    "humidity_pct": 62.2,
+    "pressure_hpa": 1008.1,
+    "bme_gas_ohm": 18100.0,
+    "co_ppm": 2.1,
+    "no2_raw_mv": 423.0,
+    "no2_ratio": 1.01,
+    "o3_ppm": 0.03,
+    "co2_ppm": 655.0,
+    "pm1_ug_m3": 8.1,
+    "pm25_ug_m3": 12.2,
+    "pm10_ug_m3": 18.4,
+    "battery_voltage": 4.04,
+    "current_ma": 82.0,
+    "power_mw": 331.3
+  },
+  "ai": {
+    "env_status": "unknown",
+    "anomaly_score": null,
+    "forecast_status": "unavailable",
+    "main_factor": null,
+    "battery_status": "unknown",
+    "node_health": "healthy",
+    "confidence": null,
+    "abstain": true
+  },
+  "deployment": {"config_version": "sensor-foundation-v2"}
+}
 ```
 
-Catatan schema:
+AI default abstains sampai decision layer memiliki data/model yang layak.
 
-- `s.bme` berisi gas proxy dari rata-rata LPG/smoke, lalu dibaca sebagai `bme_gas_raw`.
-- `s.p` tidak dikirim karena Gary tidak punya pressure.
-- `f` memakai string ringkas dipisahkan `|`; parser Raspberry Pi memecahnya menjadi daftar flag.
-- `gas_raw` boleh kosong pada payload compact ini karena sinyal gas utama sudah masuk melalui `bme_gas_raw`.
-- Simulator ini hanya untuk laptop/testing; firmware real tetap C++ di ESP32-C6.
+## 6. `sensor_status.v1`
 
-## Status Evaluasi
+Schema: `schemas/sensor_status.v1.schema.json`.
 
-Evaluator memisahkan tiga status:
+Status berisi:
 
-- pipeline_status: PASS/WARN/FAIL untuk keberhasilan preprocessing teknis.
-- dataset_coverage_status: FULL/PARTIAL untuk cakupan dataset terhadap sensor target.
-- lstm_readiness: READY/READY_WITH_LIMITATIONS/NOT_READY untuk kesiapan window sebagai input LSTM.
+- gateway ID;
+- timestamp;
+- `online`, `degraded`, atau `offline`;
+- node ID/room/boot/sequence terakhir;
+- event ID terakhir;
+- receive time dan age;
+- node health.
 
-Untuk workflow `derive-gary-schema`: pipeline_status PASS, dataset_coverage_status FULL, dan lstm_readiness READY. Untuk workflow Gary lama tanpa pressure turunan, status coverage tetap PARTIAL.
+`node_silent_after_sec` menentukan kapan node menjadi `stale`.
 
-## Output Window LSTM-Ready
+## 7. MQTT Topics
 
-File `data/processed/lstm_windows.jsonl` berisi satu sample per baris:
+```text
+data:   iot/{gateway_id}/data
+status: iot/{gateway_id}/status/sensor
+```
 
-- gateway_id.
-- node_id.
-- room_id.
-- start_timestamp.
-- end_timestamp.
-- feature_names.
-- shape, contoh [12, 16].
-- x, matrix [timesteps, features].
+Topik status lama tanpa domain hanya migration-only. Data event tidak boleh retained; status dapat retained dan memiliki LWT bila publisher produksi ditambahkan. Status lama tidak boleh masuk event spool/replay.
 
-Batch model tahap berikutnya membaca JSONL ini menjadi [samples, timesteps, features].
+Repo saat ini menyediakan contract/schema/builder, bukan broker atau publisher produksi.
+
+## 8. Validation dan Fail-Closed
+
+Hard invalid:
+
+- identity hilang;
+- tidak ada data sensor sama sekali;
+- value di luar sanity range;
+- status/quality error;
+- duplicate/out-of-order;
+- schema/version/flags malformed;
+- timestamp absolut invalid.
+
+Soft issue:
+
+- sensor tertentu missing;
+- sequence gap;
+- reboot;
+- compact v1 migration.
+
+Soft issue boleh diteruskan bila minimal ada data valid dan status sesuai. Downstream harus membaca issue/quality, bukan menganggap partial sebagai full-quality.
+
+## 9. Dataset Boundary
+
+Dataset adapters harus menghasilkan canonical field hanya bila unit dan semantiknya sesuai. Contoh:
+
+- CO UCI dalam mg/m³ tetap reference field, bukan `co_ppm`;
+- NO₂ UCI dalam µg/m³ tetap reference field, bukan sinyal SEN0574;
+- gas Bristol adalah IAQ index, bukan `bme_gas_ohm`;
+- missing dataset tetap `null`.
+
+Lihat `docs/dataset-catalog-and-adapters.md`.

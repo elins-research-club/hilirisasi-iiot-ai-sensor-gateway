@@ -1,82 +1,66 @@
 # Pembagian Preprocessing ESP32-C6 dan Raspberry Pi
 
-## Keputusan Arsitektur
-
-Preprocessing dibagi menjadi dua layer:
+## Arsitektur
 
 ```text
-ESP32-C6 sensor node
--> preprocessing ringan firmware
--> compact payload LoRa/Ebyte E32
--> Raspberry Pi gateway
--> preprocessing AI/pre-model
--> window LSTM-ready atau AI inference
+sensor environment
+-> ESP32-C6
+-> compact_sensor.v2
+-> Ebyte E32
+-> Raspberry Pi receiver
+-> canonical validation
+-> resampling/features/normalization/windowing
+-> baseline/model/decision
+-> integration payload
 ```
 
-## ESP32-C6: Preprocessing Ringan
-
-Bahasa: C/C++ dengan Arduino framework atau ESP-IDF.
+## ESP32-C6
 
 Tugas:
 
-- membaca BME688/BME668 dan SEN0377;
-- range check kasar;
-- missing check;
-- sensor error flag;
-- moving average kecil;
-- pembulatan nilai;
-- sequence number;
-- compact payload;
-- kirim LoRa.
+- baca sensor;
+- sanity range ringan;
+- moving average per field;
+- status per sensor;
+- boot ID dan sequence;
+- payload compact v2;
+- transport LoRa.
 
-Output ESP32 adalah payload yang sudah cukup bersih untuk diterima gateway, tetapi belum siap langsung untuk LSTM.
+Bukan tugas ESP32-C6:
 
-## Raspberry Pi: Preprocessing AI/Pre-Model
+- forecasting utama;
+- anomaly/drift model;
+- training;
+- multi-dataset adaptation;
+- MQTT/backend logic.
 
-Bahasa: Python.
+## Raspberry Pi
 
 Tugas:
 
-- parse payload dari ESP32 atau dataset publik;
-- validasi lanjutan;
-- deteksi sequence gap, duplicate, out-of-order, dan node silent;
-- logging/audit;
-- grouping atau buffer per node;
-- resampling ke interval tetap;
-- feature extraction;
-- normalisasi;
-- windowing `[samples, timesteps, features]`;
-- AI inference atau export dataset LSTM-ready.
+- serial reconnect/backoff;
+- append-only raw envelope;
+- parse/version validation;
+- authoritative receive time;
+- duplicate/out-of-order handling;
+- unit/canonical mapping;
+- resampling dan valid-ratio gate;
+- features dan normalization;
+- windowing;
+- baseline/model inference;
+- quality/rules/abstain;
+- event/status contract.
 
-## Kenapa Python Tetap Ada
+## Fail-Closed
 
-Python tidak di-upload ke ESP32. Python dipakai di Raspberry Pi/laptop karena pipeline AI, dataset publik, evaluasi, dan windowing time-series lebih cocok dijalankan di perangkat gateway atau mesin training.
+- sensor missing → null + status;
+- all sensors invalid → no valid event;
+- invalid frame/version → reject;
+- uptime → receive time authority;
+- duplicate/out-of-order → reject;
+- invalid checkpoint → reject;
+- invalid/stale decision input → abstain.
 
-## Simulasi End-to-End di Laptop
+## Current Boundary
 
-Karena hardware belum selalu tersedia, repo menyediakan simulator ESP32-like untuk dataset Gary:
-
-```text
-Gary CSV
--> simulasi sensor read
--> ESP32-like range/missing check, moving average, sequence, flags
--> compact payload LoRa JSONL
--> parser dan pipeline Raspberry Pi
--> window LSTM-ready
-```
-
-Command utama:
-
-```powershell
-py -3.13 run_gateway.py simulate-gary-esp32 --input-csv iot_telemetry_data.csv --output data/simulated/gary_esp32_lora_payloads.jsonl
-py -3.13 run_gateway.py run --input-file data/simulated/gary_esp32_lora_payloads.jsonl --output-dir data/processed
-```
-
-Simulator ini bukan firmware final. Fungsinya menjaga kontrak data agar pipeline Python di laptop/Raspberry Pi sudah siap menerima payload compact dari ESP32-C6 real.
-
-## Folder Terkait
-
-- `firmware/esp32-c6-sensor-node/`: skeleton firmware ESP32-C6.
-- `src/iiot_ai_sensor_gateway/`: pipeline Python Raspberry Pi/dataset.
-- `docs/esp32-preprocessing.md`: detail preprocessing ringan firmware.
-- `docs/raspberry-pi-pipeline.md`: detail preprocessing AI/pre-model.
+Firmware mock dan gateway host path sudah end-to-end. Hardware read penuh, radio link, MQTT publisher, dan model promotion belum selesai.

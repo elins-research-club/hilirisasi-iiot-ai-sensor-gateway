@@ -1,254 +1,312 @@
 # IIoT AI Sensor Gateway
 
-Repo ini berisi dua bagian yang saling tersambung untuk Industrial Environment Monitoring berbasis IIoT:
-
-- firmware ESP32-C6 sensor node untuk preprocessing ringan dan payload LoRa;
-- pipeline Python Raspberry Pi untuk preprocessing AI/pre-model, dataset publik, evaluasi, window LSTM-ready, dan LSTM forecasting awal.
-
-Python di repo ini tidak di-upload ke ESP32-C6. Firmware ESP32-C6 ditulis sebagai C++ skeleton di folder `firmware/esp32-c6-sensor-node`.
-
-## Arsitektur
+Repo ini menghubungkan node sensor ESP32-C6 dengan pipeline AI sensor di Raspberry Pi.
 
 ```text
-BME688/BME668 + SEN0377
--> ESP32-C6 firmware preprocessing ringan
--> compact payload via LoRa/Ebyte E32
--> Raspberry Pi gateway Python pipeline
--> validation lanjutan, resampling, feature extraction, normalization, windowing
--> LSTM-ready dataset -> LSTM forecasting multi-target atau AI inference
+sensor RAB
+-> ESP32-C6: read + validasi ringan + moving average
+-> compact_sensor.v2 melalui Ebyte E32
+-> Raspberry Pi: receiver + parser + validasi + canonical data
+-> resampling + features + normalization + windowing
+-> baseline/model/decision
+-> sensor_ai.v1 dan sensor_status.v1 untuk integrasi MQTT
 ```
 
-## Scope
+Python tidak dijalankan di ESP32-C6. Firmware device berada di `firmware/esp32-c6-sensor-node`; pipeline gateway berada di `src/iiot_ai_sensor_gateway`.
 
-ESP32-C6 firmware:
+## Hardware Target
 
-- sensor read;
-- range check kasar;
-- missing/sensor error flag;
-- moving average ringan;
-- sequence number;
-- compact payload JSON;
-- kirim payload ke LoRa/Ebyte E32.
+| Perangkat | Field utama | Status implementasi saat ini |
+|---|---|---|
+| BME688 | temperatur, kelembapan, tekanan, gas resistance | adapter Bosch SensorAPI forced-mode tersedia; profile resmi compile-validated, default tetap disabled tanpa dependency lokal; belum hardware-verified |
+| SEN0466 | CO ppm | jalur I²C digital ber-checksum tersedia dan compile-tested; belum hardware-verified |
+| SEN0574 | NO₂ mV dan rasio kualitatif | ADC curve-fitting mV tersedia; rasio menunggu baseline commissioning |
+| SEN0321 | O₃ ppm | jalur I²C automatic-read tersedia dan compile-tested; belum hardware-verified |
+| MH-Z19B/C | CO₂ ppm | SC16IS752 channel A, checksum Winsen, timeout, range check, dan warm-up 180 s tersedia; belum hardware-verified |
+| PMS7003T | PM1/PM2.5/PM10 | SC16IS752 channel B, wake/passive read, frame checksum, dan warm-up 30 s tersedia; belum hardware-verified |
+| INA226 | tegangan, arus, daya | calibration register dan register read tersedia; kalibrasi final menunggu shunt aktual |
+| Ebyte E32 | transport LoRa | UART/AUX/error handling tersedia; link fisik belum diverifikasi |
 
-Raspberry Pi Python pipeline:
+Sensor presence untuk subsistem kamera tidak termasuk node sensor ini.
 
-- convert dataset publik ke canonical JSONL;
-- parse payload ESP32/dataset;
-- validasi lanjutan;
-- logging dan grouping per node;
-- resampling;
-- feature extraction;
-- normalisasi;
-- windowing `[samples, timesteps, features]`.
+## Kontrak Compact v2
 
-Non-scope repo ini:
-
-- backend FastAPI, Redis, TimescaleDB, Next.js, EMQX, atau MQTT broker;
-- computer vision;
-- OpenClaw runtime;
-- model AI/prescriptive final penuh; LSTM forecasting v1 hanya model awal;
-- deployment produksi final.
-
-## Sensor Target Project
-
-- BME688/BME668: temperature, humidity, pressure, dan BME gas raw/gas resistance style signal.
-- SEN0377: CO/gas tambahan.
-
-## Simulation, Real Offline File, and Real Live Pipeline
-
-Repo ini memisahkan tiga jalur data:
-
-- Simulation/reference pipeline: dataset publik atau dummy dipakai untuk proof of
-  concept, eksperimen preprocessing, forecasting, evaluator, model selector, dan
-  decision layer awal. Workflow Gary berada di jalur ini.
-- Real offline file pipeline: data mentah dari ESP32-C6/Raspberry Pi disimpan
-  dulu sebagai file raw JSONL/CSV, lalu diproses untuk training, evaluation, dan
-  model selection. Jalur ini adalah cara paling aman untuk memakai data sensor
-  sendiri sebelum receiver live matang.
-- Real live receiver pipeline: Raspberry Pi membaca payload dari LoRa/serial
-  untuk inference dan decision lokal. Receiver live penuh belum diimplementasikan
-  dan menjadi handoff integrasi hardware.
-
-Semua jalur harus bertemu di canonical schema sebelum memakai shared core logic:
+Payload ESP32-C6 memakai:
 
 ```text
-simulation adapter     -> canonical schema
-real file adapter      -> canonical schema
-real stream receiver   -> canonical schema
-canonical schema       -> preprocessing -> windowing -> model/decision
+v,gw,n,r,ts,seq,bid,st,q,f,ok,s
 ```
 
-Data/model/artifact simulasi dan real harus tetap dipisah. `data/`, `models/`,
-`*.pt`, dan `*.npz` tetap ignored dari Git. Detail boundary ada di
-`docs/data-source-boundary.md`, `docs/shared-canonical-schema.md`,
-`docs/real-offline-file-pipeline.md`, `docs/real-live-receiver-pipeline.md`, dan
-`docs/real-receiver-contract.md`.
-
-Receiver live skeleton v0 tersedia untuk replay file dan serial UART/LoRa
-transparent mode. Mode replay tidak butuh hardware:
-
-```powershell
-py -3.13 run_gateway.py receive-real-live --replay-file tests/fixtures/real_payload_samples.jsonl --output-dir data/real_live_logs --max-messages 10
-```
-
-Mode serial memakai `pyserial` secara opsional:
-
-```powershell
-py -3.13 -m pip install -e ".[serial]"
-py -3.13 run_gateway.py receive-real-live --port COM5 --baudrate 9600 --timeout 1.0 --output-dir data/real_live_logs
-py -3.13 run_gateway.py receive-real-live --port /dev/serial0 --baudrate 9600 --timeout 1.0 --output-dir data/real_live_logs
-```
-
-Output receiver ditulis ke `accepted_payloads.jsonl`, `rejected_payloads.jsonl`,
-dan `receiver_events.jsonl` di folder output. Receiver v0 hanya logging,
-parsing, dan validasi payload; training real tetap lewat real offline file
-workflow.
-
-## Folder Utama
+Field `s`:
 
 ```text
-firmware/esp32-c6-sensor-node/  C++ skeleton firmware ESP32-C6
-src/iiot_ai_sensor_gateway/     Python pipeline Raspberry Pi/dataset
-config/                         konfigurasi pipeline Python
-docs/                           dokumentasi teknis dan laporan progres
-tests/                          unittest pipeline Python
-systemd/                        contoh service Raspberry Pi
+tc,h,p,bme,co,n2mv,n2r,o3,co2,pm1,pm25,pm10,bv,bi,bp
 ```
+
+Semantik penting:
+
+- `ts` boleh uptime node; gateway selalu mencatat `receive_timestamp` dan `time_quality`;
+- `bid + seq` membentuk identitas reboot-safe;
+- `event_id` deterministik sehingga retry menghasilkan ID yang sama;
+- missing sensor ditulis `null`, bukan nol;
+- `co` adalah ppm dari SEN0466;
+- NO₂ tetap mV/rasio kualitatif, bukan ppm;
+- kegagalan sebagian sensor boleh diteruskan sebagai `partial` dengan status/flags;
+- payload rusak, versi tidak dikenal, duplicate, dan out-of-order ditolak.
+
+Schema:
+
+- `schemas/compact_sensor.v2.schema.json`
+- `schemas/sensor_ai.v1.schema.json`
+- `schemas/sensor_status.v1.schema.json`
+
+Dokumentasi rinci: `docs/data-contract.md`.
+
+## Receiver Real-Live
+
+Receiver mendukung replay file dan serial. Seluruh log bersifat append-only dan dapat dirotasi secara atomik:
+
+```text
+raw_envelopes.jsonl
+accepted_payloads.jsonl
+rejected_payloads.jsonl
+receiver_events.jsonl
+```
+
+Replay tanpa hardware:
+
+```bash
+PY=/home/ubuntu/.hermes/hermes-agent/venv/bin/python3
+$PY run_gateway.py receive-real-live \
+  --replay-file tests/fixtures/real_payload_samples.jsonl \
+  --output-dir data/real_live_logs \
+  --max-messages 8
+```
+
+Serial memerlukan dependency opsional:
+
+```bash
+python -m pip install -e '.[serial]'
+$PY run_gateway.py receive-real-live \
+  --port /dev/ttyUSB0 \
+  --baudrate 9600 \
+  --timeout 1.0 \
+  --output-dir data/real_live_logs
+```
+
+Serial source memakai idle sleep dan exponential reconnect backoff sehingga port kosong atau terputus tidak membentuk busy-loop.
 
 ## Firmware ESP32-C6
 
-```powershell
+Default build memakai mock sensor:
+
+```bash
 cd firmware/esp32-c6-sensor-node
-pio run
-pio run -t upload
-pio device monitor
+/home/ubuntu/.venvs/platformio/bin/pio run -e mock
 ```
 
-Default firmware memakai `IIOT_USE_MOCK_SENSORS=1` di `platformio.ini`, sehingga modul bisa dibaca/dibuild tanpa wiring sensor real. Untuk hardware real, ubah ke `0`, lengkapi BME688/BME668 library di `src/sensors.cpp`, dan kalibrasi SEN0377.
+Compile profile hardware:
 
-## Gary Stafford Project Schema Workflow
+```bash
+/home/ubuntu/.venvs/platformio/bin/pio run -e hardware
+```
 
-Dataset Gary dipakai sebagai uji awal pipeline karena punya temperature, humidity, CO, LPG, dan smoke. `co` dipakai sebagai SEN0377-like feature; `lpg/smoke` dipakai sebagai dasar `bme_gas_raw` turunan. Gary asli tidak punya pressure, jadi repo membuat dataset turunan project-like agar kolomnya sama dengan target sensor.
+Profile ini mengompilasi bridge SC16IS752, MH-Z19, PMS7003T, SEN0466, SEN0574, SEN0321, INA226, dan E32. BME688 memakai profile terpisah karena source resmi tidak dipasang otomatis:
 
-Jalur yang paling mudah dipahami sekarang:
+```bash
+cd firmware/esp32-c6-sensor-node
+mkdir -p lib
+git clone --depth 1 https://github.com/boschsensortec/BME68x_SensorAPI.git lib/BME68x_SensorAPI
+/home/ubuntu/.venvs/platformio/bin/pio run -e hardware-bme68x
+```
+
+Profile mock dikunci 8 MB; profile hardware dikunci 16 MB sesuai target modul RAB. Build bukan bukti ukuran flash chip fisik. Verifikasi chip, pin, rail 5 V, bridge dual-UART, sensor, dan E32 tetap wajib sebelum upload lapangan.
+
+Dokumentasi firmware: `firmware/esp32-c6-sensor-node/README.md`.
+
+## Data Lanes dan Dataset
+
+Tiga lane tidak boleh dicampur tanpa provenance:
+
+1. simulation/reference;
+2. raw real offline capture;
+3. real live receiver.
+
+Catalog riset berada di `datasets/catalog.json`. Dataset besar tidak disimpan di Git. Artifact UCI dan Zenodo yang allow-listed sudah diunduh ke `/tmp` untuk verifikasi adapter; SHA-256 resminya dikunci di catalog sehingga download berikutnya diverifikasi otomatis.
+
+Dataset yang sudah memiliki adapter:
+
+- UCI Air Quality: temperatur/RH menjadi canonical; CO dan NO₂ tetap pada unit referensi asal; missing `-200` menjadi `null`;
+- Bristol BME680 smart building: temperatur/RH/tekanan menjadi canonical; nilai gas tetap IAQ index, bukan gas resistance dan bukan CO₂;
+- Zenodo 7198378 Fidas 200S: PM referensi tetap berada di `reference.*`; field PMS7003T proyek sengaja `null` sampai tersedia pasangan low-cost yang benar;
+- Gary Stafford: regression/compatibility lane saja; field turunan sintetis tidak boleh dipakai sebagai bukti hardware;
+- SensEURCity: kandidat multi-city CC BY 4.0, tetapi arsip sekitar 5,7 GB tetap manual-only sampai schema dan kebutuhan storage disetujui.
+
+Lihat katalog atau satu entry tanpa download:
+
+```bash
+$PY scripts/download_dataset.py --list
+$PY scripts/download_dataset.py uci_air_quality_360 --describe-only
+```
+
+Download allow-listed yang kecil:
+
+```bash
+$PY scripts/download_dataset.py uci_air_quality_360 \
+  --output-dir data/external/downloads \
+  --max-bytes 52428800
+```
+
+Adapter:
+
+```bash
+$PY run_gateway.py adapt-uci-air-quality \
+  --input-csv data/external/AirQualityUCI.csv \
+  --output data/canonical/uci_air_quality.jsonl
+
+$PY run_gateway.py adapt-bristol-bme680 \
+  --input-csv data/external/bristol/device.csv \
+  --output data/canonical/bristol_bme680.jsonl
+
+$PY run_gateway.py adapt-zenodo-pm-reference \
+  --input-csv data/external/df_pm_2min.csv \
+  --output data/canonical/zenodo_fidas_pm_reference.jsonl
+```
+
+Detail: `docs/dataset-catalog-and-adapters.md`.
+
+## Pipeline dan Modeling
+
+Pipeline dasar:
+
+```bash
+$PY run_gateway.py simulate --scenario mixed --count 120 --nodes 2 \
+  --output data/simulated/payloads.jsonl
+$PY run_gateway.py run --input-file data/simulated/payloads.jsonl \
+  --output-dir data/processed
+```
+
+Model saat ini semuanya **eksperimental**:
+
+- LastValue dan SeasonalNaive sebagai gate;
+- DLinear sebagai baseline neural ringan;
+- LSTM existing;
+- FITS-inspired edge forecaster, bukan reproduksi bit-for-bit paper;
+- native RobustZScore + PageHinkley sebagai anomaly/drift E2E tanpa dependency tambahan;
+- optional River Half-Space Trees + ADWIN sebagai challenger streaming; smoke aktual lulus di venv temporer, tetapi dependency tidak dipasang otomatis dan benchmark data nyata masih open.
+
+Target forecasting canonical:
 
 ```text
-iot_telemetry_data.csv
--> derive project sensor schema dataset
--> compact payload JSONL project-like
--> Raspberry Pi Python pre-model pipeline
--> window LSTM-ready
+temperature_c,humidity_pct,pressure_hpa,co_ppm,o3_ppm,co2_ppm,pm25_ug_m3
 ```
 
-```powershell
-py -3.13 run_gateway.py derive-gary-schema --input-csv iot_telemetry_data.csv --output-csv data/derived/gary_project_sensor_schema.csv --output-jsonl data/derived/gary_project_sensor_schema.jsonl --output-payloads data/derived/gary_project_sensor_payloads.jsonl
-py -3.13 run_gateway.py run --input-file data/derived/gary_project_sensor_payloads.jsonl --output-dir data/processed
-py -3.13 run_gateway.py evaluate --canonical data/derived/gary_project_sensor_payloads.jsonl --windows data/processed/lstm_windows.jsonl --output data/evaluation/gary_project_schema_eval.json --input-source gary_derived_project_schema_payload --simulation-layer project_schema_derivation --gateway-layer raspberry_pi_pre_model_pipeline
+Siapkan dataset dan jalankan model:
+
+```bash
+$PY run_gateway.py prepare-forecast-dataset \
+  --windows data/processed/lstm_windows.jsonl \
+  --output-npz data/modeling/lstm_forecast_dataset.npz \
+  --output-meta data/modeling/lstm_forecast_dataset_meta.json \
+  --horizon-steps 5
+
+$PY run_gateway.py train-edge-forecast \
+  --dataset data/modeling/lstm_forecast_dataset.npz \
+  --output-dir models/edge_forecast/fits \
+  --model-type fits
+
+$PY run_gateway.py evaluate-edge-forecast \
+  --dataset data/modeling/lstm_forecast_dataset.npz \
+  --model models/edge_forecast/fits/model.pt \
+  --seasonal-period 24
 ```
 
-Untuk eksperimen model yang tidak terlalu menguntungkan baseline pressure,
-buat dataset turunan baru dengan pressure synthetic yang lebih dinamis. Jangan
-menimpa output lama; gunakan nama file baru:
+Streaming native dapat langsung dijalankan dan tetap mewajibkan fitur 0–1:
 
-```powershell
-py -3.13 run_gateway.py derive-gary-schema --pressure-profile dynamic --input-csv iot_telemetry_data.csv --output-csv data/derived/gary_project_sensor_schema_dynamic.csv --output-jsonl data/derived/gary_project_sensor_schema_dynamic.jsonl --output-payloads data/derived/gary_project_sensor_payloads_dynamic.jsonl
+```bash
+$PY run_gateway.py stream-detect \
+  --backend native \
+  --input data/modeling/normalized_features.jsonl \
+  --output data/modeling/streaming_detection.jsonl \
+  --feature-names temperature_c,humidity_pct,co2_ppm,pm25_ug_m3
 ```
 
-Dataset turunan CSV berisi kolom:
+River adalah dependency opsional dan tidak diinstal otomatis:
 
-```text
-timestamp,node_id,sequence,temperature_c,humidity_pct,pressure_hpa,bme_gas_raw,co_raw
+```bash
+python -m pip install -e '.[streaming]'
+$PY run_gateway.py stream-detect \
+  --backend river \
+  --input data/modeling/normalized_features.jsonl \
+  --output data/modeling/river_detection.jsonl \
+  --feature-names temperature_c,humidity_pct,co2_ppm,pm25_ug_m3
 ```
 
-Jalur lama tetap tersedia untuk debugging parser/pipeline tanpa dataset turunan:
+Decision layer mengutamakan quality/rules, lalu baseline/model. Data invalid, stale, atau unavailable menghasilkan `abstain=true`, bukan status normal palsu.
 
-```powershell
-py -3.13 run_gateway.py convert-gary --input-csv iot_telemetry_data.csv --output data/canonical/gary_stafford_canonical.jsonl
-py -3.13 run_gateway.py run --input-file data/canonical/gary_stafford_canonical.jsonl --output-dir data/processed
-py -3.13 run_gateway.py evaluate --canonical data/canonical/gary_stafford_canonical.jsonl --windows data/processed/lstm_windows.jsonl --output data/evaluation/gary_preprocessing_eval.json
-```
+Detail:
 
-Hasil terakhir jalur Gary derived project schema -> Raspberry Pi:
-
-- `pipeline_status`: PASS.
-- `dataset_coverage_status`: FULL.
-- `lstm_readiness`: READY.
-- Shape: `[34536, 12, 16]`.
-- NaN/Inf: `0/0`.
-- Output CSV dataset: `data/derived/gary_project_sensor_schema.csv`.
-- Output payload compact: `data/derived/gary_project_sensor_payloads.jsonl`.
-- Output window: `data/processed/lstm_windows.jsonl`.
-- Output evaluasi: `data/evaluation/gary_project_schema_eval.json`.
-
-## LSTM Forecasting Workflow
-
-Setelah `data/processed/lstm_windows.jsonl` terbentuk, repo dapat membuat dataset
-forecasting dan melatih model LSTM multi-target dengan PyTorch. Input model tetap
-`[samples, timesteps, features]`, sedangkan target prediksi adalah sensor utama:
-`temperature_c`, `humidity_pct`, `pressure_hpa`, `bme_gas_raw`, dan `co_raw`.
-
-Install dependency ML opsional:
-
-```powershell
-py -3.13 -m pip install -e ".[ml]"
-```
-
-Siapkan dataset, train, evaluasi, dan prediksi:
-
-```powershell
-py -3.13 run_gateway.py prepare-forecast-dataset --windows data/processed/lstm_windows.jsonl --output-npz data/modeling/lstm_forecast_dataset.npz --output-meta data/modeling/lstm_forecast_dataset_meta.json --horizon-steps 5
-py -3.13 run_gateway.py train-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --output-dir models/lstm_forecast/latest --epochs 30 --batch-size 64 --hidden-size 64 --device auto
-py -3.13 run_gateway.py evaluate-lstm-forecast --dataset data/modeling/lstm_forecast_dataset.npz --model models/lstm_forecast/latest/model.pt --eval-batch-size 1024
-py -3.13 run_gateway.py predict-lstm-forecast --windows data/processed/lstm_windows.jsonl --model models/lstm_forecast/latest/model.pt --output models/lstm_forecast/latest/predictions.jsonl --max-windows 10
-py -3.13 run_gateway.py build-forecast-payload-v1 --predictions models/lstm_forecast/latest/predictions.jsonl --metrics models/lstm_forecast/latest/metrics.json --output models/lstm_forecast/latest/forecast_payloads.jsonl
-py -3.13 run_gateway.py build-forecast-decision-v1 --forecast-payloads models/lstm_forecast/latest/forecast_payloads.jsonl --output models/lstm_forecast/latest/decision_payloads.jsonl
-```
-
-Untuk membandingkan beberapa horizon dan ukuran LSTM sekaligus:
-
-```powershell
-py -3.13 run_gateway.py run-forecast-experiments --windows data/processed/lstm_windows.jsonl --output-dir models/forecast_experiments/latest --horizons 5,15,30 --window-sizes 12,24,36 --hidden-sizes 32,64 --epochs 30 --batch-size 64 --device auto --eval-batch-size 1024
-py -3.13 run_gateway.py select-best-forecast-model --summary models/forecast_experiments/latest/summary.csv --output models/forecast_experiments/latest/best_model_selection.json
-```
-
-Untuk eksperimen CUDA, gunakan `--device cuda`; jika VRAM penuh saat evaluasi, turunkan `--eval-batch-size`.
-
-Output model dan dataset training berada di `data/modeling/` dan `models/`, lalu
-di-ignore dari Git. Detail ada di `docs/lstm-forecasting.md`.
-
-Evaluator forecasting sekarang memisahkan status data, perbandingan baseline,
-dan kesiapan model. Jika LSTM kalah dari `last_value_baseline`, pipeline tetap
-valid, tetapi model masih dianggap tahap eksperimen.
-Metrics juga tersedia dalam skala normalized dan satuan asli hasil denormalisasi.
-Model selector memilih kandidat eksperimen dari `summary.csv`, sedangkan
-decision layer lokal rule-based mengubah forecast semua target sensor utama
-menjadi status awal `normal`, `warning`, atau `critical`. Detail ada di
-`docs/lstm-forecasting.md`, `docs/progress-lstm-forecasting-v1.md`, dan
-`docs/forecast-decision-layer.md`.
-
-## Verifikasi Python
-
-```powershell
-py -3.13 -m compileall -q .
-py -3.13 scripts/check_environment.py
-py -3.13 -m unittest discover -s tests -p 'test_*.py' -q
-```
-
-## Dokumentasi
-
-- `docs/architecture-preprocessing-split.md`
-- `docs/esp32-preprocessing.md`
-- `docs/raspberry-pi-pipeline.md`
+- `docs/modeling-fits-river-decision.md`
 - `docs/lstm-forecasting.md`
-- `docs/progress-lstm-forecasting-v1.md`
-- `docs/forecast-decision-layer.md`
-- `docs/data-source-boundary.md`
-- `docs/shared-canonical-schema.md`
-- `docs/simulation-reference-pipeline.md`
-- `docs/real-offline-file-pipeline.md`
-- `docs/real-live-receiver-pipeline.md`
-- `docs/real-receiver-contract.md`
+- `docs/MODEL_COMPARISON.md`
+
+## MQTT Integration Contract
+
+Target topic:
+
+```text
+iot/{gateway_id}/data
+iot/{gateway_id}/status/sensor
+```
+
+Topik status lama tanpa namespace domain hanya migration-only. Repo ini menyediakan schema dan payload builder, tetapi belum menjalankan broker/production publisher.
+
+## Konfigurasi
+
+```bash
+$PY run_gateway.py check-config --config config/default.toml
+```
+
+`min_valid_ratio` digunakan untuk menyaring resampled point sebelum windowing. `node_silent_after_sec` digunakan untuk status node stale.
+
+## Verifikasi
+
+```bash
+$PY -m compileall -q src tests run_gateway.py scripts/download_dataset.py
+$PY -m unittest discover -s tests -p 'test_*.py' -q
+$PY run_gateway.py check-config --config config/default.toml
+git diff --check
+```
+
+## Batas Verifikasi Saat Ini
+
+Sudah terverifikasi pada host:
+
+- parser/validator/receiver/config/schema;
+- append-only restart behavior;
+- compact v2 end-to-end mock;
+- model smoke train/eval/predict FITS-inspired, DLinear, dan LSTM;
+- native streaming RobustZScore + PageHinkley end-to-end;
+- firmware mock, hardware, dan `hardware-bme68x` dengan official Bosch SensorAPI dapat dikompilasi.
+
+Belum terverifikasi:
+
+- pembacaan seluruh sensor fisik;
+- bridge dual-UART dan rail 5 V secara fisik;
+- pembacaan BME688 fisik (official SensorAPI baru compile-validated di host);
+- E32 end-to-end;
+- flash 16 MB pada board final;
+- kalibrasi NO₂/INA226/O₃/CO/PM/CO₂;
+- MQTT broker produksi;
+- benchmark model pada dataset real dan Raspberry Pi;
+- false-alert/day, drift delay, dan battery endurance lapangan.
+
+## Dokumentasi Utama
+
+- `docs/sensor-foundation-implementation-report-2026-07-10.md`
 - `docs/data-contract.md`
-- `docs/progress-gary-derived-project-schema.md`
-- `docs/progress-gary-stafford-preprocessing.md`
+- `docs/real-live-receiver-pipeline.md`
+- `docs/dataset-catalog-and-adapters.md`
+- `docs/modeling-fits-river-decision.md`
+- `docs/testing-troubleshooting.md`
 - `firmware/esp32-c6-sensor-node/README.md`

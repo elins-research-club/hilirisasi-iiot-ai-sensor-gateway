@@ -1,5 +1,7 @@
 # Progress LSTM Forecasting v1
 
+> **Historical v1 evidence.** Target proxy dan hasil eksperimen di dokumen ini dipertahankan untuk reproduksi, bukan model production. Target canonical, safe checkpoint, dan baseline gate terbaru berada di `lstm-forecasting.md` serta `MODEL_COMPARISON.md`.
+
 ## Tujuan
 
 Dokumen ini mencatat progres forecasting time-series AI sensor v1. Tujuannya
@@ -90,7 +92,7 @@ last-value masih kuat.
 
 Target perlu dibaca per sensor, bukan hanya overall RMSE:
 
-- `co_raw`: penting untuk risiko udara/SEN0377-like, tetapi masih belum
+- `co_raw`: generic CO proxy legacy yang berguna untuk eksperimen risiko udara, tetapi masih belum
   mengalahkan baseline pada eksperimen terakhir.
 - `bme_gas_raw`: penting untuk gas proxy BME688-like, tetapi masih berasal dari
   derivasi LPG/smoke.

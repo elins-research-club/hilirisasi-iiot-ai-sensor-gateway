@@ -1,128 +1,129 @@
-# Real Live Receiver Pipeline
+# Real-Live Receiver Pipeline
 
-Real live receiver pipeline adalah workflow inference lokal di Raspberry Pi saat
-ESP32-C6 dan LoRa/Ebyte E32 sudah siap dipakai terus-menerus.
+Receiver membaca newline-delimited JSON dari replay file atau serial transport, lalu menyimpan jejak raw dan hasil canonical tanpa menimpa data run sebelumnya.
 
-## Tujuan
-
-Pipeline ini digunakan untuk membaca data real secara live, membangun window
-terbaru, menjalankan model terlatih, dan menghasilkan decision output lokal.
+## Alur
 
 ```text
-ESP32-C6 + sensor
--> LoRa/Ebyte E32
--> Raspberry Pi receiver
--> compact payload / wrapped payload
--> canonical sensor reading
--> shared preprocessing
--> latest window
--> load trained model
--> predict forecast
--> local decision payload
+replay file / Ebyte serial
+-> raw line
+-> JSON envelope decode
+-> compact payload extract
+-> parser v2
+-> validation
+-> accepted atau rejected
+-> append-only audit logs
 ```
-
-## Status Implementasi
-
-Repo sekarang menyediakan receiver live skeleton v0. Receiver ini bisa membaca
-line-delimited JSON dari replay file atau serial UART/LoRa transparent mode,
-memvalidasi payload dengan parser/validator existing, lalu menulis accepted dan
-rejected JSONL.
-
-Receiver ini belum menjadi receiver hardware final. Konfigurasi khusus Ebyte
-E32/E22, pin M0/M1/AUX, channel, reconnect kompleks, dan tuning deployment tetap
-menjadi handoff hard-prog.
-
-Repo saat ini menyediakan:
-
-- firmware skeleton ESP32-C6;
-- compact payload contract;
-- parser compact payload;
-- validator dan preprocessing core;
-- receiver skeleton `receive-real-live`;
-- forecasting/evaluator/model selector;
-- forecast payload dan decision payload v1;
-- contoh fixture real-like untuk test kontrak.
-
-## Tanggung Jawab Receiver Live
-
-Receiver live harus menangani:
-
-- koneksi serial/LoRa ke Raspberry Pi;
-- baca payload per baris atau per paket;
-- decode payload;
-- timestamp receive dari Raspberry Pi;
-- accepted/rejected payload log;
-- sequence gap dan corrupt packet;
-- reconnect/retry jika perangkat putus;
-- output raw capture ke `data/real_raw/` untuk audit.
-
-Receiver live bukan model AI dan bukan backend. Receiver hanya membawa data real
-ke canonical schema atau raw capture yang bisa diproses ulang.
 
 ## Command
 
-Replay fixture tanpa hardware:
+Replay:
 
-```powershell
-py -3.13 run_gateway.py receive-real-live --replay-file tests/fixtures/real_payload_samples.jsonl --output-dir data/real_live_logs --max-messages 10
+```bash
+PY=/home/ubuntu/.hermes/hermes-agent/venv/bin/python3
+$PY run_gateway.py receive-real-live \
+  --replay-file tests/fixtures/real_payload_samples.jsonl \
+  --output-dir data/real_live_logs \
+  --max-messages 8
 ```
 
-Serial UART/LoRa transparent mode:
+Serial:
 
-```powershell
-py -3.13 -m pip install -e ".[serial]"
-py -3.13 run_gateway.py receive-real-live --port /dev/serial0 --baudrate 9600 --timeout 1.0 --output-dir data/real_live_logs
+```bash
+python -m pip install -e '.[serial]'
+$PY run_gateway.py receive-real-live \
+  --port /dev/ttyUSB0 \
+  --baudrate 9600 \
+  --timeout 1.0 \
+  --output-dir data/real_live_logs
 ```
 
-Di Windows, ganti port dengan `COMx`, misalnya `COM5`.
-
-## Output Receiver v0
-
-Receiver v0 menulis:
+Optional controls:
 
 ```text
-data/real_live_logs/accepted_payloads.jsonl
-data/real_live_logs/rejected_payloads.jsonl
-data/real_live_logs/receiver_events.jsonl
+--rotate-max-bytes
+--idle-sleep-sec
+--reconnect-initial-sec
+--reconnect-max-sec
 ```
 
-Accepted payload berisi metadata receive, source, raw line, payload compact yang
-sudah di-unwrap, node, room, sequence, dan validation issues soft. Rejected
-payload berisi metadata receive, raw line, kategori error, pesan error, dan
-validation issues jika parse berhasil tetapi validasi gagal.
+`max-messages=0` berarti live terus sampai dihentikan.
 
-## Hubungan Dengan Training
+## Output
 
-Training model tidak harus berjalan dari stream live. Alur yang lebih aman:
+| File | Isi |
+|---|---|
+| `raw_envelopes.jsonl` | raw line, receive time, source/radio, parse status |
+| `accepted_payloads.jsonl` | payload asli, canonical record, event ID, issues soft |
+| `rejected_payloads.jsonl` | raw line, kategori error, alasan, issues validation |
+| `receiver_events.jsonl` | start/stop summary tiap run |
 
-```text
-live receiver capture
--> raw real file
--> offline preprocessing/training/evaluation
--> selected model
--> deploy model ke Raspberry Pi
--> live inference
+Semua file dibuka dalam mode append. Saat file melebihi batas, file lama diubah nama secara atomik lalu receiver membuat file append baru. Restart receiver tidak menghapus accepted/rejected/events/raw sebelumnya.
+
+## Envelope yang Didukung
+
+Bare compact payload:
+
+```json
+{"v":2,"n":"node-1","r":"room-A","ts":77,"seq":1,"bid":"boot-a","st":"ok","q":"valid","f":[],"ok":{"bme688":"ok"},"s":{"tc":28,"h":60}}
 ```
 
-Dengan cara ini model dapat diuji ulang dan dibandingkan terhadap baseline
-sebelum dipakai untuk decision lokal.
+Wrapped payload dari radio receiver:
 
-## Output Live Inference
-
-Output lokal yang disarankan:
-
-```text
-models/lstm_forecast/latest/forecast_payloads.jsonl
-models/lstm_forecast/latest/decision_payloads.jsonl
-logs/gateway/*.log
+```json
+{
+  "payload": {"v":2,"n":"node-1","r":"room-A","ts":77,"seq":1,"bid":"boot-a","st":"ok","q":"valid","f":[],"ok":{"bme688":"ok"},"s":{"tc":28,"h":60}},
+  "radio": {"rssi":-91,"snr":7.1}
+}
 ```
 
-Saat integrasi backend/MQTT dilakukan nanti, output ini dapat menjadi dasar
-payload MQTT. Tahap tersebut berada di luar scope task ini.
+`payload` juga boleh berupa JSON object string. Metadata radio harus object.
 
-## Batasan
+## Kategori Reject
 
-- Receiver v0 belum mengatur konfigurasi Ebyte E32/E22 secara hardware-specific.
-- Belum ada MQTT publish.
-- Belum ada backend/dashboard/OpenClaw runtime.
-- Threshold decision layer v1 belum final sampai dikalibrasi dengan sensor real.
+- `empty_line`;
+- `json_decode_error`;
+- `parse_error`;
+- `validation_error`.
+
+Frame invalid tidak menghasilkan canonical sensor event.
+
+## Serial Reliability
+
+`SerialLineSource` memiliki:
+
+- blocking timeout;
+- explicit sleep ketika `readline()` kosong;
+- reconnect setelah exception transport;
+- exponential backoff sampai batas maksimum;
+- close connection pada reconnect/shutdown generator.
+
+Ini mencegah polling kosong menggunakan 100% CPU. Test menggunakan fake serial source membuktikan sleep dan backoff dipanggil; angka CPU host/Pi belum diukur dan tidak diklaim.
+
+## Time dan Identity
+
+Receiver menambahkan `receive_timestamp`. Uptime node tetap disimpan sebagai `node_timestamp`; waktu event memakai receive time dengan `time_quality=gateway_received`.
+
+Stable event ID membuat replay/retry frame yang sama dapat dideduplikasi. Boot baru membentuk identity cycle baru.
+
+## Systemd
+
+Unit contoh `systemd/iiot-ai-sensor-gateway.service` menjalankan live serial mode dan memakai:
+
+- `Restart=on-failure`;
+- `RestartSec=5`;
+- start-rate limit;
+- writable state path khusus;
+- environment file opsional.
+
+Unit tidak lagi menjalankan batch input dengan `Restart=always`.
+
+## Yang Belum Diverifikasi
+
+- nama device serial pada Raspberry Pi target;
+- konfigurasi radio E32 fisik;
+- framing tambahan dari receiver radio aktual;
+- signal metadata RSSI/SNR dari hardware;
+- permission/group serial;
+- soak test reconnect/power-loss multi-hari;
+- local spool untuk MQTT publish.
