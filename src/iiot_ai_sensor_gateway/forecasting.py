@@ -13,26 +13,39 @@ from typing import Any
 from .features import FEATURE_NAMES
 from .normalization import DEFAULT_RANGES
 
-TARGET_NAMES = ("temperature_c", "humidity_pct", "pressure_hpa", "bme_gas_raw", "co_raw")
+TARGET_NAMES = (
+    "temperature_c",
+    "humidity_pct",
+    "pressure_hpa",
+    "co_ppm",
+    "o3_ppm",
+    "co2_ppm",
+    "pm25_ug_m3",
+)
 MODEL_VERSION = "lstm_forecast_v1"
 SELECTION_SCHEMA = "iiot.ai_sensor.forecast_model_selection.v1"
 FORECAST_DECISION_SCHEMA = "iiot.ai_sensor.forecast_decision.v1"
+FORECAST_STRATEGIES = ("absolute", "residual")
 DEFAULT_SELECTION_WEIGHTS = {
-    "co_raw": 0.25,
-    "bme_gas_raw": 0.25,
-    "temperature_c": 0.15,
-    "humidity_pct": 0.15,
-    "pressure_hpa": 0.10,
+    "temperature_c": 0.10,
+    "humidity_pct": 0.08,
+    "pressure_hpa": 0.07,
+    "co_ppm": 0.20,
+    "o3_ppm": 0.15,
+    "co2_ppm": 0.15,
+    "pm25_ug_m3": 0.15,
     "overall": 0.10,
 }
 SEVERITY_RANK = {"normal": 0, "warning": 1, "critical": 2}
 DECISION_FACTOR_PRIORITY = {
-    "co_raw": 0,
-    "bme_gas_raw": 1,
-    "temperature_c": 2,
-    "humidity_pct": 3,
-    "pressure_hpa": 4,
-    "model_readiness": 5,
+    "co_ppm": 0,
+    "o3_ppm": 1,
+    "pm25_ug_m3": 2,
+    "co2_ppm": 3,
+    "temperature_c": 4,
+    "humidity_pct": 5,
+    "pressure_hpa": 6,
+    "model_readiness": 7,
 }
 
 
@@ -453,6 +466,7 @@ def train_lstm_forecast(
     seed: int = 42,
     device: str = "auto",
     model_version: str = MODEL_VERSION,
+    forecast_strategy: str = "absolute",
 ) -> dict[str, Any]:
     np = _require_numpy()
     torch, nn, DataLoader, TensorDataset = _require_torch()
@@ -467,15 +481,24 @@ def train_lstm_forecast(
     y_val = data["y_val"].astype("float32")
     feature_names = tuple(str(item) for item in data["feature_names"])
     target_names = tuple(str(item) for item in data["target_names"])
+    target_indices = data["target_indices"].astype("int64")
     dataset_meta = _load_dataset_metadata(data)
     normalization_ranges = _load_normalization_ranges(data)
     resolved_device = _device_name(device)
+    if forecast_strategy not in FORECAST_STRATEGIES:
+        raise ValueError(f"forecast_strategy must be one of {FORECAST_STRATEGIES}")
+
+    y_train_fit = y_train
+    y_val_fit = y_val
+    if forecast_strategy == "residual":
+        y_train_fit = y_train - X_train[:, -1, target_indices]
+        y_val_fit = y_val - X_val[:, -1, target_indices]
 
     model = build_lstm_forecaster(X_train.shape[2], y_train.shape[1], hidden_size, num_layers).to(resolved_device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     criterion = nn.MSELoss()
-    loader = DataLoader(TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train)), batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val)), batch_size=batch_size, shuffle=False)
+    loader = DataLoader(TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train_fit)), batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val_fit)), batch_size=batch_size, shuffle=False)
 
     best_loss = math.inf
     best_epoch = 0
@@ -520,12 +543,14 @@ def train_lstm_forecast(
     created_at = _utc_now()
     model_metadata = {
         "model_version": model_version,
+        "forecast_strategy": forecast_strategy,
         "created_at": created_at,
         "horizon_steps": int(data["horizon_steps"][0]) if "horizon_steps" in data else None,
         "resample_interval_sec": int(data["resample_interval_sec"][0]) if "resample_interval_sec" in data else 60,
         "window_size": int(data["window_size"][0]) if "window_size" in data else int(X_train.shape[1]),
         "feature_names": list(feature_names),
         "target_names": list(target_names),
+        "target_indices": [int(index) for index in target_indices],
         "normalization_ranges": {key: list(value) for key, value in normalization_ranges.items()},
         "dataset_meta": dataset_meta,
         "metrics_ref": str(out_dir / "metrics.json"),
@@ -561,14 +586,29 @@ def train_lstm_forecast(
 def _load_model(model_path: str | Path, device: str = "auto"):
     torch, _nn, _loader, _dataset = _require_torch()
     resolved_device = _device_name(device)
-    checkpoint = torch.load(model_path, map_location=resolved_device, weights_only=False)
+    try:
+        checkpoint = torch.load(
+            model_path,
+            map_location=resolved_device,
+            weights_only=True,
+        )
+    except Exception as exc:
+        raise ValueError(f"unsafe or invalid forecast checkpoint rejected: {model_path}") from exc
+    if not isinstance(checkpoint, dict):
+        raise ValueError("forecast checkpoint must be a mapping")
+    required = {"state_dict", "input_size", "output_size", "hidden_size", "num_layers"}
+    missing = sorted(required.difference(checkpoint))
+    if missing:
+        raise ValueError(f"forecast checkpoint is missing required keys: {missing}")
+    if not isinstance(checkpoint["state_dict"], dict):
+        raise ValueError("forecast checkpoint state_dict must be a mapping")
     model = build_lstm_forecaster(
         int(checkpoint["input_size"]),
         int(checkpoint["output_size"]),
         int(checkpoint["hidden_size"]),
         int(checkpoint["num_layers"]),
     ).to(resolved_device)
-    model.load_state_dict(checkpoint["state_dict"])
+    model.load_state_dict(checkpoint["state_dict"], strict=True)
     model.eval()
     return model, checkpoint, resolved_device
 
@@ -589,7 +629,6 @@ def _regression_metrics(actual, predicted, target_names: tuple[str, ...]) -> dic
 
 
 def _denormalize_matrix(values, target_names: tuple[str, ...], ranges: dict[str, tuple[float, float]]):
-    np = _require_numpy()
     output = values.astype("float32").copy()
     for index, name in enumerate(target_names):
         low, high = ranges.get(name, (0.0, 1.0))
@@ -619,6 +658,12 @@ def _metric_deltas(lstm: dict[str, Any], baseline: dict[str, Any]) -> dict[str, 
         "overall_rmse_skill_score": _skill_score(float(lstm["overall_rmse"]), float(baseline["overall_rmse"])),
         "per_target": per_target,
     }
+
+
+def _apply_forecast_strategy(raw_prediction: Any, x: Any, target_indices: Any, strategy: str) -> Any:
+    if strategy == "residual":
+        return x[:, -1, target_indices] + raw_prediction
+    return raw_prediction
 
 
 def _baseline_status(test_metrics: dict[str, Any]) -> str:
@@ -654,6 +699,7 @@ def evaluate_lstm_forecast(
     model, checkpoint, resolved_device = _load_model(model_path, device)
     target_names = tuple(str(item) for item in data["target_names"])
     target_indices = data["target_indices"].astype("int64")
+    forecast_strategy = str(checkpoint.get("forecast_strategy", "absolute"))
     dataset_meta = _load_dataset_metadata(data)
     stored_ranges = _load_normalization_ranges(data)
     ranges = _merged_ranges(normalization_ranges or stored_ranges)
@@ -664,6 +710,7 @@ def evaluate_lstm_forecast(
         "dataset_npz": str(dataset_npz),
         "device": resolved_device,
         "model_version": checkpoint.get("model_version", MODEL_VERSION),
+        "forecast_strategy": forecast_strategy,
         "created_at": _utc_now(),
         "target_names": list(target_names),
         "feature_names": list(str(item) for item in data["feature_names"]),
@@ -691,8 +738,9 @@ def evaluate_lstm_forecast(
     for split in ("train", "val", "test"):
         x = data[f"X_{split}"].astype("float32")
         y = data[f"y_{split}"].astype("float32")
-        pred = predict_batches(x)
         baseline = x[:, -1, target_indices]
+        raw_pred = predict_batches(x)
+        pred = _apply_forecast_strategy(raw_pred, x, target_indices, forecast_strategy)
         lstm_metrics = _regression_metrics(y, pred, target_names)
         baseline_metrics = _regression_metrics(y, baseline, target_names)
         y_denorm = _denormalize_matrix(y, target_names, ranges)
@@ -749,6 +797,11 @@ def predict_lstm_forecast(
     model, checkpoint, resolved_device = _load_model(model_path, device)
     feature_names = tuple(checkpoint["feature_names"])
     target_names = tuple(checkpoint["target_names"])
+    target_indices = np.asarray(
+        checkpoint.get("target_indices", [feature_names.index(name) for name in target_names]),
+        dtype=np.int64,
+    )
+    forecast_strategy = str(checkpoint.get("forecast_strategy", "absolute"))
     ranges = _merged_ranges(normalization_ranges or {
         key: (float(value[0]), float(value[1]))
         for key, value in checkpoint.get("normalization_ranges", {}).items()
@@ -762,7 +815,8 @@ def predict_lstm_forecast(
                 raise ValueError("window feature_names do not match trained model")
             x = np.asarray([record["x"]], dtype=np.float32)
             with torch.no_grad():
-                pred = model(torch.from_numpy(x).to(resolved_device)).detach().cpu().numpy()[0]
+                raw_pred = model(torch.from_numpy(x).to(resolved_device)).detach().cpu().numpy()
+                pred = _apply_forecast_strategy(raw_pred, x, target_indices, forecast_strategy)[0]
             prediction_normalized = [float(value) for value in pred]
             horizon_steps = checkpoint.get("horizon_steps")
             resample_interval_sec = checkpoint.get("resample_interval_sec", 60)
@@ -776,6 +830,7 @@ def predict_lstm_forecast(
                 "prediction_normalized": prediction_normalized,
                 "prediction_values": _denormalize_values(target_names, prediction_normalized, ranges),
                 "model_version": checkpoint.get("model_version", MODEL_VERSION),
+                "forecast_strategy": forecast_strategy,
                 "forecast_horizon_steps": horizon_steps,
                 "forecast_horizon_minutes": (horizon_steps or 0) * resample_interval_sec / 60,
                 "metrics_ref": checkpoint.get("metrics_ref"),
@@ -890,8 +945,8 @@ def _target_notes(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "strongest_target": {"name": strongest, "skill_score": skills[strongest]},
         "weakest_target": {"name": weakest, "skill_score": skills[weakest]},
-        "pressure_note": "pressure_hpa in Gary derived workflow is synthetic and should not be treated as real BME688 pressure validation",
-        "air_quality_note": "co_raw and bme_gas_raw remain important for environmental risk, but all target sensors are included in selection",
+        "pressure_note": "pressure_hpa from any derived Gary workflow is synthetic and is excluded from real-sensor validation claims",
+        "air_quality_note": "CO, O3, CO2, and PM2.5 targets are evaluated only when the selected dataset lane actually contains those measurements",
     }
 
 
@@ -899,11 +954,13 @@ def select_best_forecast_model(
     summary_csv: str | Path,
     output_json: str | Path,
     top_k: int = 5,
-    gas_weight: float = 0.25,
-    co_weight: float = 0.25,
-    temperature_weight: float = 0.15,
-    humidity_weight: float = 0.15,
-    pressure_weight: float = 0.10,
+    co_weight: float = 0.20,
+    o3_weight: float = 0.15,
+    co2_weight: float = 0.15,
+    pm25_weight: float = 0.15,
+    temperature_weight: float = 0.10,
+    humidity_weight: float = 0.08,
+    pressure_weight: float = 0.07,
     overall_weight: float = 0.10,
     require_data_status: str = "PASS",
     prefer_readiness: bool = True,
@@ -918,8 +975,10 @@ def select_best_forecast_model(
         raise ValueError(f"no rows with data_status={require_data_status}")
     weights = {
         **DEFAULT_SELECTION_WEIGHTS,
-        "co_raw": co_weight,
-        "bme_gas_raw": gas_weight,
+        "co_ppm": co_weight,
+        "o3_ppm": o3_weight,
+        "co2_ppm": co2_weight,
+        "pm25_ug_m3": pm25_weight,
         "temperature_c": temperature_weight,
         "humidity_pct": humidity_weight,
         "pressure_hpa": pressure_weight,
@@ -928,8 +987,10 @@ def select_best_forecast_model(
     scored = [(row, _selection_score(row, weights, prefer_readiness)) for row in candidates]
     critical_scores_positive = any(
         _safe_float(row.get("test_rmse_skill_score")) > 0
-        or _safe_float(row.get("co_raw_skill_score")) > 0
-        or _safe_float(row.get("bme_gas_raw_skill_score")) > 0
+        or _safe_float(row.get("co_ppm_skill_score")) > 0
+        or _safe_float(row.get("o3_ppm_skill_score")) > 0
+        or _safe_float(row.get("co2_ppm_skill_score")) > 0
+        or _safe_float(row.get("pm25_ug_m3_skill_score")) > 0
         for row, _score in scored
     )
     if critical_scores_positive:
@@ -961,7 +1022,7 @@ def select_best_forecast_model(
                 "UNDER_BASELINE": -0.05,
                 "PROMISING_READINESS": 0.05,
             },
-            "fallback": "lowest test_lstm_rmse when overall/co_raw/bme_gas_raw skill scores are all below baseline",
+            "fallback": "lowest test_lstm_rmse when overall and measured air-quality target skill scores are all below baseline",
         },
         "selected_run": _selection_row(selected_row, selected_score),
         "top_runs": [_selection_row(row, score) for row, score in top_rows],
@@ -981,6 +1042,7 @@ def _experiment_row(run_id: str, stats: ForecastDatasetStats, training: dict[str
         "forecast_horizon_minutes": stats.horizon_steps * stats.resample_interval_sec / 60,
         "window_size": stats.window_size,
         "hidden_size": hidden_size,
+        "forecast_strategy": training.get("forecast_strategy", "absolute"),
         "epochs_ran": training["epochs_ran"],
         "data_status": metrics["data_status"],
         "baseline_comparison_status": metrics["baseline_comparison_status"],
@@ -1021,6 +1083,7 @@ def run_forecast_experiments(
     normalization_ranges: dict[str, tuple[float, float]] | None = None,
     model_version: str = MODEL_VERSION,
     eval_batch_size: int = 1024,
+    forecast_strategy: str = "absolute",
 ) -> list[dict[str, Any]]:
     output_path = Path(output_dir)
     runs_path = output_path / "runs"
@@ -1060,6 +1123,7 @@ def run_forecast_experiments(
                     seed,
                     device,
                     model_version,
+                    forecast_strategy,
                 )
                 metrics = evaluate_lstm_forecast(
                     dataset_path,
@@ -1128,21 +1192,35 @@ def _forecast_decision(predicted_sensor: dict[str, Any], model_readiness: str) -
     rules: list[dict[str, str]] = []
     if model_readiness == "NOT_READY":
         rules.append(_decision_rule("warning", "model_readiness", "model_readiness is NOT_READY"))
-    co_raw = _safe_float(predicted_sensor.get("co_raw"), math.nan)
-    bme_gas_raw = _safe_float(predicted_sensor.get("bme_gas_raw"), math.nan)
+    co_ppm = _safe_float(predicted_sensor.get("co_ppm"), math.nan)
+    o3_ppm = _safe_float(predicted_sensor.get("o3_ppm"), math.nan)
+    co2_ppm = _safe_float(predicted_sensor.get("co2_ppm"), math.nan)
+    pm25_ug_m3 = _safe_float(predicted_sensor.get("pm25_ug_m3"), math.nan)
     temperature_c = _safe_float(predicted_sensor.get("temperature_c"), math.nan)
     humidity_pct = _safe_float(predicted_sensor.get("humidity_pct"), math.nan)
     pressure_hpa = _safe_float(predicted_sensor.get("pressure_hpa"), math.nan)
-    if math.isfinite(co_raw):
-        if co_raw >= 0.08:
-            rules.append(_decision_rule("critical", "co_raw", "co_raw forecast exceeded critical threshold"))
-        elif co_raw >= 0.04:
-            rules.append(_decision_rule("warning", "co_raw", "co_raw forecast exceeded warning threshold"))
-    if math.isfinite(bme_gas_raw):
-        if bme_gas_raw >= 3500:
-            rules.append(_decision_rule("critical", "bme_gas_raw", "bme_gas_raw forecast exceeded critical threshold"))
-        elif bme_gas_raw >= 2500:
-            rules.append(_decision_rule("warning", "bme_gas_raw", "bme_gas_raw forecast exceeded warning threshold"))
+    # These are project commissioning defaults, not regulatory safety limits.
+    # Production thresholds remain configuration-owned and require domain review.
+    if math.isfinite(co_ppm):
+        if co_ppm >= 35.0:
+            rules.append(_decision_rule("critical", "co_ppm", "CO forecast exceeded project critical threshold"))
+        elif co_ppm >= 9.0:
+            rules.append(_decision_rule("warning", "co_ppm", "CO forecast exceeded project warning threshold"))
+    if math.isfinite(o3_ppm):
+        if o3_ppm >= 0.10:
+            rules.append(_decision_rule("critical", "o3_ppm", "O3 forecast exceeded project critical threshold"))
+        elif o3_ppm >= 0.07:
+            rules.append(_decision_rule("warning", "o3_ppm", "O3 forecast exceeded project warning threshold"))
+    if math.isfinite(co2_ppm):
+        if co2_ppm >= 2000.0:
+            rules.append(_decision_rule("critical", "co2_ppm", "CO2 forecast exceeded project critical threshold"))
+        elif co2_ppm >= 1000.0:
+            rules.append(_decision_rule("warning", "co2_ppm", "CO2 forecast exceeded project warning threshold"))
+    if math.isfinite(pm25_ug_m3):
+        if pm25_ug_m3 >= 75.0:
+            rules.append(_decision_rule("critical", "pm25_ug_m3", "PM2.5 forecast exceeded project critical threshold"))
+        elif pm25_ug_m3 >= 35.0:
+            rules.append(_decision_rule("warning", "pm25_ug_m3", "PM2.5 forecast exceeded project warning threshold"))
     if math.isfinite(temperature_c):
         if temperature_c >= 38:
             rules.append(_decision_rule("critical", "temperature_c", "temperature_c forecast exceeded critical threshold"))
