@@ -11,6 +11,7 @@ import numpy as np
 from iiot_ai_sensor_gateway.contracts import FeatureVector
 from iiot_ai_sensor_gateway.dataset_quality import (
     array_quality_report,
+    finite_or_raise,
     infer_cadence,
     select_active_features,
 )
@@ -183,6 +184,15 @@ class DatasetQualityAndBaselineTests(unittest.TestCase):
         self.assertNotIn("constant", stats.feature_names)
         self.assertIn("feature_manifest", meta)
         self.assertIn("data_quality", meta)
+
+
+    def test_finite_or_raise_chunked_accepts_large_finite_and_rejects_nan(self):
+        finite = np.ones((5000, 8, 4), dtype=np.float32)
+        finite_or_raise({"X_train": finite}, chunk_rows=512)
+        bad = finite.copy()
+        bad[4999, 0, 0] = np.nan
+        with self.assertRaisesRegex(ValueError, "non-finite"):
+            finite_or_raise({"X_train": bad}, chunk_rows=512)
 
 
 if __name__ == "__main__":

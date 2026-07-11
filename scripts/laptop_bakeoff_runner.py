@@ -31,6 +31,7 @@ class Lane:
     targets: tuple[str, ...]
     window_size: int
     seasonal_period: int
+    max_samples_per_split: int = 0
 
     @property
     def processed_dir(self) -> Path:
@@ -349,8 +350,9 @@ def lane_definitions() -> dict[str, Lane]:
             "fidas",
             ROOT / "data" / "external" / "adapted" / "fidas_compact.jsonl",
             ("pm25_ug_m3", "pm1_ug_m3", "pm10_ug_m3"),
-            144,
+            72,
             720,
+            20000,
         ),
         "sim": Lane(
             "sim",
@@ -411,6 +413,7 @@ def prepare_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> bool:
             "--horizon-steps", str(args.horizon),
             "--window-size", str(lane.window_size),
             "--purge-gap-steps", str(args.purge_gap),
+            "--max-samples-per-split", str(lane.max_samples_per_split),
         ],
         [lane.dataset_path, lane.meta_path],
     )

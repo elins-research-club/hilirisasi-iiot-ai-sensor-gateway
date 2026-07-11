@@ -348,6 +348,7 @@ def prepare_forecast_dataset(
     cadence_relative_tolerance: float = 0.10,
     max_irregular_fraction: float = 0.05,
     near_constant_epsilon: float = 1e-8,
+    max_samples_per_split: int = 0,
 ) -> ForecastDatasetStats:
     if horizon_steps < 1:
         raise ValueError("horizon_steps must be >= 1")
@@ -377,6 +378,8 @@ def prepare_forecast_dataset(
     for record in records:
         by_node.setdefault(record["node_id"], []).append(record)
 
+    if max_samples_per_split < 0:
+        raise ValueError("max_samples_per_split must be >= 0")
     arrays: dict[str, list[Any]] = {
         "X_train": [],
         "y_train": [],
@@ -394,6 +397,10 @@ def prepare_forecast_dataset(
         split_samples = _assign_temporal_splits(samples, train_ratio, val_ratio, selected_purge_gap)
         for split, items in split_samples.items():
             for sample in items:
+                # Cap during collection so huge public lanes never materialize
+                # hundreds of thousands of windows before np.asarray.
+                if max_samples_per_split and len(arrays[f"X_{split}"]) >= max_samples_per_split:
+                    continue
                 arrays[f"X_{split}"].append(sample["x"])
                 arrays[f"y_{split}"].append(sample["y"])
                 _update_split_range(split_time_range, split, sample)

@@ -33,6 +33,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--cadence-relative-tolerance", type=float, default=0.10)
     parser.add_argument("--max-irregular-fraction", type=float, default=0.05)
+    parser.add_argument(
+        "--max-samples-per-split",
+        type=int,
+        default=0,
+        help="0=keep all samples; positive value caps each split after temporal split",
+    )
     args = parser.parse_args(argv)
 
     targets = tuple(item.strip() for item in args.targets.split(",") if item.strip())
@@ -50,6 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         resample_interval_sec=args.cadence_sec if args.cadence_sec > 0 else None,
         cadence_relative_tolerance=args.cadence_relative_tolerance,
         max_irregular_fraction=args.max_irregular_fraction,
+        max_samples_per_split=args.max_samples_per_split,
     )
     print(json.dumps(stats.as_dict(), indent=2))
     return 0

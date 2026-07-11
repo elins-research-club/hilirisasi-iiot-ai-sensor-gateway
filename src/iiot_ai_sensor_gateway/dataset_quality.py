@@ -225,13 +225,37 @@ def array_quality_report(
     }
 
 
-def finite_or_raise(arrays: dict[str, Any]) -> None:
+def finite_or_raise(
+    arrays: dict[str, Any],
+    *,
+    chunk_rows: int = 2048,
+) -> None:
+    """Reject non-finite values without allocating a full bool mask.
+
+    Large forecast tensors (for example Fidas-scale windows) can be multiple
+    GiB. ``np.isfinite(array).all()`` materializes a same-shaped bool array and
+    can OOM even when the float32 payload itself still fits.
+    """
+
     import numpy as np
 
+    if chunk_rows < 1:
+        raise ValueError("chunk_rows must be >= 1")
     for name, array in arrays.items():
-        if not np.isfinite(array).all():
-            raise ValueError(f"non-finite values found in {name}")
+        if not isinstance(array, np.ndarray):
+            array = np.asarray(array)
         if array.size == 0:
             raise ValueError(f"empty array found in {name}")
-        if not all(math.isfinite(float(value)) for value in (np.min(array), np.max(array))):
+        if array.ndim == 0:
+            if not math.isfinite(float(array)):
+                raise ValueError(f"non-finite values found in {name}")
+            continue
+        # Scan along the leading axis in bounded chunks so peak RAM stays O(chunk).
+        for start in range(0, int(array.shape[0]), chunk_rows):
+            block = array[start : start + chunk_rows]
+            if not np.isfinite(block).all():
+                raise ValueError(f"non-finite values found in {name}")
+        minimum = float(np.min(array))
+        maximum = float(np.max(array))
+        if not (math.isfinite(minimum) and math.isfinite(maximum)):
             raise ValueError(f"invalid numeric range in {name}")
