@@ -33,6 +33,14 @@ class ContractConfig:
 
 
 @dataclass(frozen=True)
+class PreprocessingConfig:
+    version: str = "gateway_preprocess.v1"
+    apply_to_v2: bool = False
+    state_max_entries: int = 100_000
+    filters: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class ReceiverConfig:
     rotate_max_bytes: int = 10 * 1024 * 1024
     serial_idle_sleep_sec: float = 0.05
@@ -45,6 +53,7 @@ class AppConfig:
     identity: IdentityConfig = field(default_factory=IdentityConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     contract: ContractConfig = field(default_factory=ContractConfig)
+    preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)
     receiver: ReceiverConfig = field(default_factory=ReceiverConfig)
     validation_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
     normalization_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
@@ -81,6 +90,22 @@ def _validate(config: AppConfig) -> AppConfig:
             raise ValueError(f"pipeline.{name} must be >= 1")
     if not 0 < pipeline.min_valid_ratio <= 1:
         raise ValueError("pipeline.min_valid_ratio must be in (0, 1]")
+    preprocessing = config.preprocessing
+    if not preprocessing.version.strip():
+        raise ValueError("preprocessing.version must not be empty")
+    if preprocessing.state_max_entries < 1:
+        raise ValueError("preprocessing.state_max_entries must be >= 1")
+    allowed_filter_kinds = {"none", "ema", "median", "moving_average"}
+    for field_name, spec in preprocessing.filters.items():
+        if not isinstance(spec, dict):
+            raise ValueError(f"preprocessing filter {field_name!r} must be a table")
+        kind = str(spec.get("kind", "none"))
+        if kind not in allowed_filter_kinds:
+            raise ValueError(f"unsupported preprocessing filter kind for {field_name}: {kind}")
+        alpha = float(spec.get("alpha", 0.25))
+        window = int(spec.get("window", 3))
+        if not 0.0 < alpha <= 1.0 or window < 1:
+            raise ValueError(f"invalid preprocessing filter parameters for {field_name}")
     receiver = config.receiver
     if receiver.rotate_max_bytes < 0:
         raise ValueError("receiver.rotate_max_bytes must be >= 0")
@@ -117,6 +142,7 @@ def load_config(path: str | Path = "config/default.toml") -> AppConfig:
     identity_raw = raw.get("identity", {})
     pipeline_raw = raw.get("pipeline", {})
     contract_raw = raw.get("contract", {})
+    preprocessing_raw = raw.get("preprocessing", {})
     receiver_raw = raw.get("receiver", {})
     gateway_id = os.environ.get(
         "IIOT_GATEWAY_ID", identity_raw.get("gateway_id", IdentityConfig.gateway_id)
@@ -130,6 +156,17 @@ def load_config(path: str | Path = "config/default.toml") -> AppConfig:
         ),
         pipeline=PipelineConfig(**{**PipelineConfig().__dict__, **pipeline_raw}),
         contract=ContractConfig(**{**ContractConfig().__dict__, **contract_raw}),
+        preprocessing=PreprocessingConfig(
+            version=str(preprocessing_raw.get("version", PreprocessingConfig.version)),
+            apply_to_v2=bool(preprocessing_raw.get("apply_to_v2", False)),
+            state_max_entries=int(
+                preprocessing_raw.get("state_max_entries", PreprocessingConfig.state_max_entries)
+            ),
+            filters={
+                str(name): dict(spec)
+                for name, spec in preprocessing_raw.get("filters", {}).items()
+            },
+        ),
         receiver=ReceiverConfig(**{**ReceiverConfig().__dict__, **receiver_raw}),
         validation_ranges=_ranges(raw.get("validation", {}).get("ranges", {})),
         normalization_ranges=_ranges(raw.get("normalization", {}).get("minmax", {})),

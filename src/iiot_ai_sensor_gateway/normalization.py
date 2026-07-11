@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections import defaultdict
+from typing import Any
+
 from .contracts import FeatureVector
 from .features import CANONICAL_SENSOR_FEATURES, DELTA_FIELDS
 
@@ -41,8 +44,18 @@ for field in ("temperature_c", "humidity_pct", "co2_ppm", "pm25_ug_m3"):
 
 
 class MinMaxNormalizer:
+    """Physical/configured min-max transform with observable clipping.
+
+    The transform remains deterministic and backward-compatible, but every
+    lower/upper clip is counted so public/reference lane mismatch cannot remain
+    silent. Reports contain counts only, never raw sensor data.
+    """
+
     def __init__(self, ranges: dict[str, tuple[float, float]] | None = None) -> None:
         self.ranges = {**DEFAULT_RANGES, **(ranges or {})}
+        self._stats: dict[str, dict[str, int]] = defaultdict(
+            lambda: {"seen": 0, "lower_clipped": 0, "upper_clipped": 0}
+        )
 
     @staticmethod
     def _scale(value: float, low: float, high: float) -> float:
@@ -54,7 +67,14 @@ class MinMaxNormalizer:
         values: dict[str, float] = {}
         for name, value in vector.values.items():
             low, high = self.ranges.get(name, (0.0, 1.0))
-            values[name] = self._scale(float(value), low, high)
+            number = float(value)
+            stats = self._stats[name]
+            stats["seen"] += 1
+            if number < low:
+                stats["lower_clipped"] += 1
+            elif number > high:
+                stats["upper_clipped"] += 1
+            values[name] = self._scale(number, low, high)
         return FeatureVector(
             vector.gateway_id,
             vector.node_id,
@@ -62,3 +82,27 @@ class MinMaxNormalizer:
             vector.timestamp,
             values,
         )
+
+    def report(self) -> dict[str, Any]:
+        fields: dict[str, Any] = {}
+        total_seen = 0
+        total_clipped = 0
+        for name in sorted(self._stats):
+            stats = self._stats[name]
+            seen = stats["seen"]
+            clipped = stats["lower_clipped"] + stats["upper_clipped"]
+            total_seen += seen
+            total_clipped += clipped
+            fields[name] = {
+                **stats,
+                "clip_fraction": clipped / seen if seen else 0.0,
+                "range": list(self.ranges.get(name, (0.0, 1.0))),
+            }
+        return {
+            "schema": "iiot.ai_sensor.normalization_report.v1",
+            "method": "configured_minmax_with_clip",
+            "total_seen": total_seen,
+            "total_clipped": total_clipped,
+            "clip_fraction": total_clipped / total_seen if total_seen else 0.0,
+            "fields": fields,
+        }

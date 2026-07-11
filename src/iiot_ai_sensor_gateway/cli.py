@@ -8,6 +8,10 @@ from pathlib import Path
 
 from .adapters.gary_stafford import convert_gary_stafford_csv
 from .adapters.gary_project_schema import derive_gary_project_schema
+from .anomaly_benchmark import (
+    benchmark_detection_file,
+    inject_labeled_normalized_fixture,
+)
 from .adapters.bristol_bme680 import adapt_bristol_bme680_csv
 from .adapters.uci_air_quality import adapt_uci_air_quality_csv
 from .adapters.zenodo_pm_reference import adapt_zenodo_pm_reference_csv
@@ -34,6 +38,7 @@ from .edge_forecasting import (
     train_edge_forecast,
 )
 from .parser import PayloadParser
+from .preprocessing import GatewaySemanticPreprocessor
 from .real import FileReplaySource, LiveReceiver, SerialLineSource
 from .real.serial_source import SerialDependencyError
 from .resampling import resample
@@ -75,6 +80,13 @@ def _positive_float(value: str) -> float:
     parsed = float(value)
     if parsed <= 0:
         raise argparse.ArgumentTypeError('expected a positive number')
+    return parsed
+
+
+def _nonnegative_float(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError('expected a non-negative number')
     return parsed
 
 
@@ -140,6 +152,9 @@ def build_parser() -> argparse.ArgumentParser:
     prep_forecast.add_argument('--horizon-steps', type=int, default=5)
     prep_forecast.add_argument('--window-size', type=int, default=0)
     prep_forecast.add_argument('--purge-gap-steps', type=int, default=-1)
+    prep_forecast.add_argument('--cadence-sec', type=_nonnegative_float, default=0.0, help='0=infer from timestamps; positive value is validated against timestamps')
+    prep_forecast.add_argument('--cadence-relative-tolerance', type=_positive_float, default=0.10)
+    prep_forecast.add_argument('--max-irregular-fraction', type=_nonnegative_float, default=0.05)
     train_forecast = sub.add_parser('train-lstm-forecast', help='train PyTorch LSTM multi-target forecasting model')
     train_forecast.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
     train_forecast.add_argument('--output-dir', default='models/lstm_forecast/latest')
@@ -152,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_forecast.add_argument('--seed', type=int, default=42)
     train_forecast.add_argument('--device', default='auto')
     train_forecast.add_argument('--model-version', default='lstm_forecast_v1')
-    train_forecast.add_argument('--forecast-strategy', choices=FORECAST_STRATEGIES, default='absolute')
+    train_forecast.add_argument('--forecast-strategy', choices=FORECAST_STRATEGIES, default='residual')
     eval_forecast = sub.add_parser('evaluate-lstm-forecast', help='evaluate LSTM forecast metrics and baseline')
     eval_forecast.add_argument('--config', default='config/default.toml')
     eval_forecast.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
@@ -160,6 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_forecast.add_argument('--output-dir', default=None)
     eval_forecast.add_argument('--device', default='auto')
     eval_forecast.add_argument('--eval-batch-size', type=int, default=1024)
+    eval_forecast.add_argument('--seasonal-period', type=_nonnegative_int, default=0)
     pred_forecast = sub.add_parser('predict-lstm-forecast', help='predict normalized sensor targets from windows')
     pred_forecast.add_argument('--config', default='config/default.toml')
     pred_forecast.add_argument('--windows', default='data/processed/lstm_windows.jsonl')
@@ -183,7 +199,8 @@ def build_parser() -> argparse.ArgumentParser:
     experiments.add_argument('--device', default='auto')
     experiments.add_argument('--model-version', default='lstm_forecast_v1')
     experiments.add_argument('--eval-batch-size', type=int, default=1024)
-    experiments.add_argument('--forecast-strategy', choices=FORECAST_STRATEGIES, default='absolute')
+    experiments.add_argument('--forecast-strategy', choices=FORECAST_STRATEGIES, default='residual')
+    experiments.add_argument('--cadence-sec', type=_nonnegative_float, default=0.0, help='0=infer from timestamps')
     payload = sub.add_parser('build-forecast-payload-v1', help='build decision-layer-ready forecast payload JSONL')
     payload.add_argument('--predictions', default='models/lstm_forecast/latest/predictions.jsonl')
     payload.add_argument('--metrics', default='models/lstm_forecast/latest/metrics.json')
@@ -192,7 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
     decision = sub.add_parser('build-forecast-decision-v1', help='build local rule-based forecast decision JSONL')
     decision.add_argument('--forecast-payloads', default='models/lstm_forecast/latest/forecast_payloads.jsonl')
     decision.add_argument('--output', default='models/lstm_forecast/latest/decision_payloads.jsonl')
-    edge_train = sub.add_parser('train-edge-forecast', help='train FITS-inspired or DLinear edge forecast candidate')
+    edge_train = sub.add_parser('train-edge-forecast', help='train FITS-inspired, FITS-official-style, or DLinear edge forecast candidate')
     edge_train.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
     edge_train.add_argument('--output-dir', default='models/edge_forecast/latest')
     edge_train.add_argument('--model-type', choices=MODEL_TYPES, default='fits')
@@ -204,6 +221,8 @@ def build_parser() -> argparse.ArgumentParser:
     edge_train.add_argument('--device', default='auto')
     edge_train.add_argument('--frequency-bins', type=_nonnegative_int, default=0)
     edge_train.add_argument('--moving-average-kernel', type=_positive_int, default=3)
+    edge_train.add_argument('--pred-len', type=_positive_int, default=1, help='FITS official-style prediction length (project default 1 for single-horizon labels)')
+    edge_train.add_argument('--individual', action='store_true', help='per-channel frequency upsampler (fits_official)')
     edge_eval = sub.add_parser('evaluate-edge-forecast', help='evaluate edge forecast candidate against LastValue and SeasonalNaive')
     edge_eval.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
     edge_eval.add_argument('--model', default='models/edge_forecast/latest/model.pt')
@@ -233,6 +252,19 @@ def build_parser() -> argparse.ArgumentParser:
     stream.add_argument('--z-scale', type=_positive_float, default=3.0)
     stream.add_argument('--page-hinkley-delta', type=float, default=0.005)
     stream.add_argument('--page-hinkley-threshold', type=_positive_float, default=0.25)
+    inject_anomaly = sub.add_parser('inject-anomaly-fixture', help='create deterministic normalized event-injection fixture for harness validation')
+    inject_anomaly.add_argument('--output', default='data/modeling/anomaly_fixture.jsonl')
+    inject_anomaly.add_argument('--labels', default='data/modeling/anomaly_fixture_labels.json')
+    inject_anomaly.add_argument('--sample-count', type=_positive_int, default=360)
+    inject_anomaly.add_argument('--interval-sec', type=_positive_int, default=60)
+    inject_anomaly.add_argument('--event-starts', type=_parse_int_list, default=(120, 260))
+    inject_anomaly.add_argument('--event-length', type=_positive_int, default=12)
+    benchmark_anomaly = sub.add_parser('benchmark-anomaly-events', help='evaluate timestamped anomaly decisions against event labels')
+    benchmark_anomaly.add_argument('--detections', required=True)
+    benchmark_anomaly.add_argument('--labels', required=True)
+    benchmark_anomaly.add_argument('--output', default='data/modeling/anomaly_benchmark.json')
+    benchmark_anomaly.add_argument('--merge-gap-sec', type=_nonnegative_float, default=0.0)
+    benchmark_anomaly.add_argument('--match-tolerance-sec', type=_nonnegative_float, default=0.0)
     selector = sub.add_parser('select-best-forecast-model', help='select a forecast model candidate from experiment summary.csv')
     selector.add_argument('--summary', default='models/forecast_experiments/latest/summary.csv')
     selector.add_argument('--output', default='models/forecast_experiments/latest/best_model_selection.json')
@@ -276,27 +308,61 @@ def run_pipeline(args: argparse.Namespace) -> int:
         config.pipeline.sequence_gap_warn,
         config.pipeline.validation_state_max_entries,
     )
+    preprocessor = GatewaySemanticPreprocessor(
+        version=config.preprocessing.version,
+        filters=config.preprocessing.filters,
+        apply_to_v2=config.preprocessing.apply_to_v2,
+        state_max_entries=config.preprocessing.state_max_entries,
+    )
     normalizer = MinMaxNormalizer(config.normalization_ranges)
     window_builder = WindowBuilder(config.pipeline.window_size, config.pipeline.window_step)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    by_node = defaultdict(list)
+    by_node: dict[tuple[str, str, str], list] = defaultdict(list)
     count = 0
-    with (output_dir / 'raw_payloads.jsonl').open('w', encoding='utf-8') as raw_file:
+    with (
+        (output_dir / 'raw_payloads.jsonl').open('w', encoding='utf-8') as raw_file,
+        (output_dir / 'hardware_observations.jsonl').open('w', encoding='utf-8') as hardware_file,
+        (output_dir / 'canonical_observations.jsonl').open('w', encoding='utf-8') as canonical_file,
+    ):
         for line in Path(args.input_file).read_text(encoding='utf-8').splitlines():
             if not line.strip():
                 continue
             raw_file.write(json.dumps({'payload': line}, separators=(',', ':')) + '\n')
             reading = parser.parse(line)
-            result = validator.validate(reading)
-            by_node[reading.node_id].append(result)
+            hardware_file.write(json.dumps(reading.as_record(), separators=(',', ':')) + '\n')
+            result = preprocessor.process(validator.validate(reading))
+            canonical_file.write(json.dumps(result.as_record(), separators=(',', ':')) + '\n')
+            by_node[(reading.gateway_id, reading.node_id, reading.room_id)].append(result)
             count += 1
             if args.max_payloads and count >= args.max_payloads:
                 break
-    with (output_dir / 'windows.jsonl').open('w', encoding='utf-8') as windows_file, (output_dir / 'lstm_windows.jsonl').open('w', encoding='utf-8') as dataset_file:
-        for node_id in sorted(by_node):
-            rows = sorted(by_node[node_id], key=lambda item: item.reading.timestamp)
+    with (
+        (output_dir / 'processed_timeseries.jsonl').open('w', encoding='utf-8') as processed_file,
+        (output_dir / 'windows.jsonl').open('w', encoding='utf-8') as windows_file,
+        (output_dir / 'lstm_windows.jsonl').open('w', encoding='utf-8') as dataset_file,
+    ):
+        for identity in sorted(by_node):
+            rows = sorted(by_node[identity], key=lambda item: item.reading.timestamp)
             points = resample(rows, config.pipeline.resample_interval_sec)
+            for point in points:
+                processed_file.write(
+                    json.dumps(
+                        {
+                            'gateway_id': point.gateway_id,
+                            'node_id': point.node_id,
+                            'room_id': point.room_id,
+                            'timestamp': point.timestamp.isoformat(),
+                            'sensor': point.sensor.as_dict(),
+                            'valid_ratio': point.valid_ratio,
+                            'missing_count': point.missing_count,
+                            'seq_gap_count': point.seq_gap_count,
+                            'source_event_ids': list(point.source_event_ids),
+                            'preprocessing_version': point.preprocessing_version,
+                        },
+                        separators=(',', ':'),
+                    ) + '\n'
+                )
             for vector in extract_features(points):
                 window = window_builder.add(normalizer.normalize(vector))
                 if window is None:
@@ -304,6 +370,9 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 record = json.dumps(window.as_record(), separators=(',', ':'))
                 windows_file.write(record + '\n')
                 dataset_file.write(record + '\n')
+    (output_dir / 'normalization_report.json').write_text(
+        json.dumps(normalizer.report(), indent=2), encoding='utf-8'
+    )
     return 0
 
 def main(argv: list[str] | None = None) -> int:
@@ -365,10 +434,12 @@ def main(argv: list[str] | None = None) -> int:
             args.output_npz,
             args.output_meta,
             args.horizon_steps,
-            resample_interval_sec=config.pipeline.resample_interval_sec,
+            resample_interval_sec=(args.cadence_sec if args.cadence_sec > 0 else None),
             window_size=args.window_size or None,
             purge_gap_steps=None if args.purge_gap_steps < 0 else args.purge_gap_steps,
             normalization_ranges=config.normalization_ranges,
+            cadence_relative_tolerance=args.cadence_relative_tolerance,
+            max_irregular_fraction=args.max_irregular_fraction,
         )
         print(json.dumps(stats.as_dict(), indent=2))
         return 0
@@ -398,6 +469,7 @@ def main(argv: list[str] | None = None) -> int:
             args.device,
             config.normalization_ranges,
             args.eval_batch_size,
+            args.seasonal_period,
         )
         print(json.dumps(result, indent=2))
         return 0
@@ -420,7 +492,7 @@ def main(argv: list[str] | None = None) -> int:
             args.seed,
             args.device,
             args.window_sizes,
-            load_config(args.config).pipeline.resample_interval_sec,
+            (args.cadence_sec if args.cadence_sec > 0 else None),
             load_config(args.config).normalization_ranges,
             args.model_version,
             args.eval_batch_size,
@@ -449,6 +521,8 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             frequency_bins=args.frequency_bins,
             moving_average_kernel=args.moving_average_kernel,
+            pred_len=getattr(args, 'pred_len', 1),
+            individual=bool(getattr(args, 'individual', False)),
         )
         print(json.dumps(result, indent=2))
         return 0
@@ -473,6 +547,27 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
         )
         print(output)
+        return 0
+    if args.cmd == 'inject-anomaly-fixture':
+        result = inject_labeled_normalized_fixture(
+            args.output,
+            args.labels,
+            sample_count=args.sample_count,
+            interval_sec=args.interval_sec,
+            event_start_indices=args.event_starts,
+            event_length=args.event_length,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'benchmark-anomaly-events':
+        result = benchmark_detection_file(
+            args.detections,
+            args.labels,
+            args.output,
+            merge_gap_sec=args.merge_gap_sec,
+            match_tolerance_sec=args.match_tolerance_sec,
+        )
+        print(json.dumps(result, indent=2))
         return 0
     if args.cmd == 'stream-detect':
         try:

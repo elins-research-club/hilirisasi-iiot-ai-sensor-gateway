@@ -7,7 +7,7 @@ from typing import TypeVar
 from .contracts import SensorReading, ValidationResult
 
 ERROR_STATUSES = {"sensor_error", "invalid", "error", "failed"}
-ACCEPTED_QUALITIES = {"valid", "ok", "partial", "degraded"}
+ACCEPTED_QUALITIES = {"valid", "ok", "partial", "degraded", "hardware_observation"}
 SOFT_ISSUES = {
     "sequence_gap",
     "node_reboot",
@@ -25,8 +25,8 @@ SOFT_ISSUES = {
 
 @dataclass
 class NodeValidationState:
-    last_sequence: OrderedDict[tuple[str, str], int] = field(default_factory=OrderedDict)
-    last_boot: OrderedDict[str, str] = field(default_factory=OrderedDict)
+    last_sequence: OrderedDict[tuple[str, str, str], int] = field(default_factory=OrderedDict)
+    last_boot: OrderedDict[tuple[str, str], str] = field(default_factory=OrderedDict)
     seen_event_ids: OrderedDict[str, None] = field(default_factory=OrderedDict)
 
 
@@ -113,11 +113,12 @@ class ReadingValidator:
         if reading.compact_version == 1:
             issues.append("legacy_contract_v1")
 
-        previous_boot = self.state.last_boot.get(reading.node_id)
+        node_identity = (reading.gateway_id, reading.node_id)
+        previous_boot = self.state.last_boot.get(node_identity)
         if previous_boot is not None and previous_boot != reading.boot_id:
             issues.append("node_reboot")
-        key = (reading.node_id, reading.boot_id)
-        previous = self.state.last_sequence.get(key)
+        sequence_key = (reading.gateway_id, reading.node_id, reading.boot_id)
+        previous = self.state.last_sequence.get(sequence_key)
         sequence_issue: str | None = None
         if previous is not None:
             if reading.sequence == previous:
@@ -135,10 +136,10 @@ class ReadingValidator:
         is_valid = not hard_invalid
         if is_valid and sequence_issue not in {"duplicate_sequence", "out_of_order_sequence", "duplicate_event_id"}:
             _remember_bounded(
-                self.state.last_sequence, key, reading.sequence, self.state_max_entries
+                self.state.last_sequence, sequence_key, reading.sequence, self.state_max_entries
             )
             _remember_bounded(
-                self.state.last_boot, reading.node_id, reading.boot_id, self.state_max_entries
+                self.state.last_boot, node_identity, reading.boot_id, self.state_max_entries
             )
             _remember_bounded(
                 self.state.seen_event_ids, reading.event_id, None, self.state_max_entries

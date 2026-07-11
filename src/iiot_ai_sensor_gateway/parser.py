@@ -8,6 +8,7 @@ from .contracts import (
     COMPACT_KEYS,
     COMPACT_SCHEMA_V1,
     COMPACT_SCHEMA_V2,
+    COMPACT_SCHEMA_V3,
     LEGACY_SENSOR_KEYS,
     SENSOR_AI_SCHEMA_V1,
     SENSOR_KEYS,
@@ -38,6 +39,8 @@ class PayloadParser:
     @staticmethod
     def _version(data: dict[str, Any]) -> int:
         value = data.get("v", data.get("compact_version", data.get("schema_version")))
+        if value in (3, "3", COMPACT_SCHEMA_V3):
+            return 3
         if value in (2, "2", COMPACT_SCHEMA_V2):
             return 2
         if value in (None, 1, "1", COMPACT_SCHEMA_V1):
@@ -46,7 +49,8 @@ class PayloadParser:
 
     @staticmethod
     def _flags(value: Any) -> tuple[str, ...]:
-        if value in (None, ""):
+        # Empty / zero-ish values mean "no flags" (research adapters may emit 0).
+        if value in (None, "", 0, 0.0, False):
             return ()
         if isinstance(value, str):
             return tuple(flag.strip() for flag in value.split("|") if flag.strip())
@@ -54,6 +58,9 @@ class PayloadParser:
             if not all(isinstance(flag, str) for flag in value):
                 raise ValueError("flags list must contain strings only")
             return tuple(flag.strip() for flag in value if flag.strip())
+        if isinstance(value, int):
+            # Non-zero integer bitfields are not a supported compact-v2 encoding.
+            raise ValueError("flags integer bitfield is not supported; use string or list of strings")
         raise ValueError("flags must be a string or a list of strings")
 
     @staticmethod
@@ -98,6 +105,19 @@ class PayloadParser:
             missing = [key for key in required if key not in data]
             if missing:
                 raise ValueError(f"compact sensor v2 missing required fields: {missing}")
+        if compact_version == 3:
+            required = (
+                "v", "n", "r", "ts", "tb", "seq", "bid", "pp", "fw", "cfg",
+                "cal", "hs", "f", "ok", "s",
+            )
+            missing = [key for key in required if key not in data]
+            if missing:
+                raise ValueError(f"compact sensor v3 missing required fields: {missing}")
+            if data.get("pp") != "hardware_only":
+                raise ValueError("compact sensor v3 processing profile must be hardware_only")
+            for key in ("tb", "fw", "cfg", "cal", "hs"):
+                if not isinstance(data.get(key), str) or not data[key].strip():
+                    raise ValueError(f"compact sensor v3 field {key} must be a non-empty string")
 
         sensor_source = data.get("sensor") or data.get("s") or data
         if not isinstance(sensor_source, dict):
@@ -107,11 +127,11 @@ class PayloadParser:
             raise ValueError("radio metadata must be an object")
 
         flags = list(self._flags(pick(data, COMPACT_KEYS["flags"], ())))
-        if compact_version == 2:
+        if compact_version in (2, 3):
             sensor_values = {
                 name: to_float(pick(sensor_source, aliases)) for name, aliases in SENSOR_KEYS.items()
             }
-            # Keep migration-only fields empty for a clean v2 record.
+            # Keep migration-only fields empty for clean v2/v3 records.
             sensor = SensorValues(**sensor_values)
         else:
             legacy_values = {
@@ -132,8 +152,8 @@ class PayloadParser:
         room_id = str(pick(data, COMPACT_KEYS["room_id"], self.default_room_id)).strip()
         sequence = to_int(pick(data, COMPACT_KEYS["sequence"], 0))
         boot_id = str(pick(data, COMPACT_KEYS["boot_id"], "legacy" if compact_version == 1 else "")).strip()
-        if compact_version == 2 and not boot_id:
-            raise ValueError("compact sensor v2 requires boot_id")
+        if compact_version in (2, 3) and not boot_id:
+            raise ValueError(f"compact sensor v{compact_version} requires boot_id")
         if sequence < 0:
             raise ValueError("sequence must be >= 0")
 
@@ -162,8 +182,16 @@ class PayloadParser:
             schema_version=SENSOR_AI_SCHEMA_V1,
             time_quality=time_quality,
             node_timestamp=node_timestamp,
-            status=str(pick(data, COMPACT_KEYS["status"], "ok")),
-            quality=str(pick(data, COMPACT_KEYS["quality"], "valid")),
+            status=(
+                str(data["hs"])
+                if compact_version == 3
+                else str(pick(data, COMPACT_KEYS["status"], "ok"))
+            ),
+            quality=(
+                "hardware_observation"
+                if compact_version == 3
+                else str(pick(data, COMPACT_KEYS["quality"], "valid"))
+            ),
             flags=tuple(flags),
             sensor_status=sensor_status,
             sensor=sensor,
@@ -173,4 +201,12 @@ class PayloadParser:
             ),
             source=source,
             raw=data,
+            time_basis=str(data.get("tb", "legacy_unspecified")),
+            processing_profile=str(data.get("pp", "legacy_node_preprocessed" if compact_version == 2 else "legacy_unspecified")),
+            firmware_version=str(data.get("fw", "unknown")),
+            hardware_config_version=str(data.get("cfg", "unknown")),
+            calibration_version=str(data.get("cal", "unknown")),
+            hardware_summary=str(data.get("hs", data.get("st", "unknown"))),
+            preprocessing_version="unprocessed",
+            source_event_id=event_id,
         )

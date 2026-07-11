@@ -6,6 +6,7 @@ from .contracts import WindowSample
 from .features import extract_features
 from .normalization import MinMaxNormalizer
 from .parser import PayloadParser
+from .preprocessing import GatewaySemanticPreprocessor
 from .resampling import resample
 from .validation import ReadingValidator
 from .windowing import WindowBuilder
@@ -23,17 +24,23 @@ class PreModelPipeline:
             config.pipeline.sequence_gap_warn,
             config.pipeline.validation_state_max_entries,
         )
+        self.preprocessor = GatewaySemanticPreprocessor(
+            version=config.preprocessing.version,
+            filters=config.preprocessing.filters,
+            apply_to_v2=config.preprocessing.apply_to_v2,
+            state_max_entries=config.preprocessing.state_max_entries,
+        )
         self.buffer = NodeBuffer(config.pipeline.buffer_max_size)
         self.normalizer = MinMaxNormalizer(config.normalization_ranges)
         self.window_builder = WindowBuilder(config.pipeline.window_size, config.pipeline.window_step)
-        self.processed_features: set[tuple[str, str]] = set()
+        self.processed_features: set[tuple[str, str, str, str]] = set()
 
     def process_payload(self, payload: str | bytes | dict) -> list[WindowSample]:
         reading = self.parser.parse(payload)
-        result = self.validator.validate(reading)
+        result = self.preprocessor.process(self.validator.validate(reading))
         self.buffer.add(result)
         points = resample(
-            self.buffer.node_items(reading.node_id),
+            self.buffer.items_for(reading),
             self.config.pipeline.resample_interval_sec,
         )
         eligible_points = [
@@ -43,7 +50,12 @@ class PreModelPipeline:
         ]
         windows: list[WindowSample] = []
         for vector in extract_features(eligible_points):
-            key = (vector.node_id, vector.timestamp.isoformat())
+            key = (
+                vector.gateway_id,
+                vector.node_id,
+                vector.room_id,
+                vector.timestamp.isoformat(),
+            )
             if key in self.processed_features:
                 continue
             self.processed_features.add(key)

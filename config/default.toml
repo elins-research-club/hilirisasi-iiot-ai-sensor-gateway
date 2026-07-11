@@ -18,6 +18,26 @@ allow_legacy_v1 = true
 data_topic = "iot/{gateway_id}/data"
 status_topic = "iot/{gateway_id}/status/sensor"
 
+[preprocessing]
+version = "gateway_preprocess.v1"
+# compact v2 already contains node-side smoothing; keep false during migration.
+apply_to_v2 = false
+state_max_entries = 100000
+
+# Filter policy is intentionally per sensor. "none" preserves spikes for the
+# initial raw-first rollout; tune only from real hardware evidence.
+[preprocessing.filters.temperature_c]
+kind = "none"
+
+[preprocessing.filters.humidity_pct]
+kind = "none"
+
+[preprocessing.filters.co_ppm]
+kind = "none"
+
+[preprocessing.filters.pm25_ug_m3]
+kind = "none"
+
 [receiver]
 rotate_max_bytes = 10485760
 serial_idle_sleep_sec = 0.05

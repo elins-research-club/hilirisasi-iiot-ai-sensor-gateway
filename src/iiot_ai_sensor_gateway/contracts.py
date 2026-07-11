@@ -9,6 +9,7 @@ from typing import Any
 
 COMPACT_SCHEMA_V1 = "compact_sensor.v1"
 COMPACT_SCHEMA_V2 = "compact_sensor.v2"
+COMPACT_SCHEMA_V3 = "compact_sensor.v3"
 SENSOR_AI_SCHEMA_V1 = "sensor_ai.v1"
 SENSOR_STATUS_SCHEMA_V1 = "sensor_status.v1"
 
@@ -159,6 +160,14 @@ class SensorReading:
     radio: RadioMeta = field(default_factory=RadioMeta)
     source: str = "unknown"
     raw: dict[str, Any] = field(default_factory=dict)
+    time_basis: str = "unknown"
+    processing_profile: str = "legacy_unspecified"
+    firmware_version: str = "unknown"
+    hardware_config_version: str = "unknown"
+    calibration_version: str = "unknown"
+    hardware_summary: str = "unknown"
+    preprocessing_version: str = "unprocessed"
+    source_event_id: str | None = None
 
     def as_record(self) -> dict[str, Any]:
         return {
@@ -175,7 +184,15 @@ class SensorReading:
                 "node_timestamp": self.node_timestamp,
                 "receive_timestamp": self.receive_timestamp.isoformat(),
                 "time_quality": self.time_quality,
+                "time_basis": self.time_basis,
                 "transport": self.source,
+                "processing_profile": self.processing_profile,
+                "firmware_version": self.firmware_version,
+                "hardware_config_version": self.hardware_config_version,
+                "calibration_version": self.calibration_version,
+                "hardware_summary": self.hardware_summary,
+                "preprocessing_version": self.preprocessing_version,
+                "source_event_id": self.source_event_id or self.event_id,
                 "radio": self.radio.as_dict(),
             },
             "status": self.status,
@@ -209,6 +226,8 @@ class ResampledPoint:
     valid_ratio: float
     missing_count: int
     seq_gap_count: int
+    source_event_ids: tuple[str, ...] = field(default_factory=tuple)
+    preprocessing_version: str = "unprocessed"
 
 
 @dataclass(frozen=True)
