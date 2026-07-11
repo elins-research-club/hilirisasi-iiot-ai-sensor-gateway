@@ -53,7 +53,15 @@ def download(
     if not isinstance(url, str) or not url.startswith("https://"):
         raise ValueError("catalog download URL must be an HTTPS URL")
     output_dir.mkdir(parents=True, exist_ok=True)
-    filename = Path(urllib.parse.urlparse(url).path).name or f"{entry['id']}.download"
+    configured_filename = entry.get("download_filename")
+    if configured_filename is not None:
+        if not isinstance(configured_filename, str) or not configured_filename.strip():
+            raise ValueError("catalog download_filename must be a non-empty string")
+        filename = Path(configured_filename).name
+        if filename != configured_filename or filename in {".", ".."}:
+            raise ValueError("catalog download_filename must be a safe basename")
+    else:
+        filename = Path(urllib.parse.urlparse(url).path).name or f"{entry['id']}.download"
     destination = output_dir / filename
     if destination.exists():
         actual = sha256_file(destination)

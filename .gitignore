@@ -22,6 +22,8 @@ data/real_live_logs/
 data/processed/
 data/processed*/
 data/modeling/
+data/bakeoff/
+data/external/
 data/logs/
 logs/
 *.log
