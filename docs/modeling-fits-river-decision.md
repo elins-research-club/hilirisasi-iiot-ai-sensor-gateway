@@ -12,20 +12,27 @@ Semua model pada tahap ini masih **EXPERIMENTAL**. Tidak ada model yang dipromos
 - Battery/node health: rules terlebih dahulu.
 - NO₂: ordinal/ratio band, bukan ppm.
 
-## Baseline Gate
+## Baseline dan Data-Quality Gate
 
-Setiap model forecast dibandingkan dengan:
+Baseline statistik bersama:
 
 - LastValue;
-- SeasonalNaive;
-- DLinear.
+- window mean;
+- drift;
+- SeasonalNaive hanya bila period/window/horizon applicable dan prediksinya tidak duplicate.
 
-Gate edge forecast lulus hanya bila:
+DLinear, FITS, dan LSTM adalah challenger yang dibandingkan terhadap baseline tersebut. Baseline dipilih **per target pada validation split**, lalu selection dikunci untuk test. Test set tidak memilih pembanding.
 
-- test RMSE lebih rendah daripada baseline terbaik; dan
-- menang pada minimal separuh target.
+Gate forecast hanya dapat lulus bila:
 
-Status `PROMISING` bukan production-ready. Data real, site/device split, repeated run, dan runtime target tetap wajib.
+- test model mengalahkan validation-selected baseline;
+- menang pada minimal separuh effective targets;
+- cadence/horizon valid;
+- target tidak constant/near-constant atau boundary-saturated;
+- clipping/target coverage/data-quality gate `PASS`;
+- checkpoint ordered feature schema/hash cocok.
+
+Status `PROMISING` bukan production-ready. Data real, site/device split, repeated seeds, dan runtime target tetap wajib.
 
 ## FITS-inspired Edge Forecaster
 
@@ -44,7 +51,7 @@ Risiko:
 
 - tidak otomatis unggul pada trend/non-periodik;
 - performance sangat bergantung horizon, sampling, dan seasonality;
-- wajib dibandingkan LastValue/SeasonalNaive/DLinear.
+- wajib dibandingkan baseline applicable yang dipilih pada validation split serta DLinear/LSTM challenger secara adil.
 
 Command:
 
@@ -103,7 +110,7 @@ $PY run_gateway.py stream-detect \
   --feature-names temperature_c,humidity_pct,co2_ppm,pm25_ug_m3
 ```
 
-Native backend telah dijalankan end-to-end pada smoke dataset host. Status tetap `EXPERIMENTAL`; false-alert/day dan detection delay belum tersedia tanpa label event real.
+Native backend telah dijalankan end-to-end pada smoke dataset host. Event benchmark harness sekarang menghitung precision/recall/F1, false-alert/day, dan detection delay bila label timestamp tersedia. Synthetic injection hanya memverifikasi plumbing; real field metrics tetap belum tersedia tanpa label event nyata.
 
 ## River Half-Space Trees + ADWIN
 

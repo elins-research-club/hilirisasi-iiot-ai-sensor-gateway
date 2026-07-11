@@ -1,6 +1,6 @@
 # Riset Model Time-Series Edge untuk AI Sensor
 
-Tanggal keputusan: 10 Juli 2026.
+Tanggal keputusan awal: 10 Juli 2026. Methodology hardening: 11 Juli 2026.
 
 ## Batas Kebenaran
 
@@ -16,9 +16,9 @@ Tanggal keputusan: 10 Juli 2026.
 
 Wajib menjadi lapisan pertama karena dapat menangani missing, stale, sensor error, warm-up, sequence gap, dan threshold commissioning dengan perilaku deterministik.
 
-### LastValue dan SeasonalNaive
+### LastValue, Window Mean, Drift, dan SeasonalNaive
 
-Baseline forecast paling penting. Model kompleks yang tidak mengalahkan keduanya belum memberi nilai deployment.
+Baseline forecast paling penting. SeasonalNaive hanya valid bila period, horizon, dan history window cukup serta prediksinya tidak identik dengan LastValue. Baseline dipilih per target pada validation split dan dikunci untuk test.
 
 ### DLinear
 
@@ -70,12 +70,15 @@ quality/rules
 
 Model forecast:
 
-- time-ordered split;
+- time-ordered split + purge/no-overlap assertions;
+- cadence/horizon duration yang benar;
 - no leakage;
+- train-only active feature schema/hash;
+- constant/near-constant dan clipping/saturation gate;
 - MAE/RMSE/MASE;
-- skill terhadap baseline;
-- per-target win;
-- repeated seed bila stochastic;
+- skill terhadap validation-selected applicable baseline;
+- effective-target coverage dan per-target win;
+- repeated seeds + mean/std bila stochastic;
 - leave-device/site-out bila tersedia.
 
 Model anomaly:
@@ -99,15 +102,15 @@ Deployment:
 
 - DLinear: tersedia train/eval/predict.
 - FITS-inspired: tersedia train/eval/predict.
-- LastValue dan SeasonalNaive: baseline gate tersedia.
+- LastValue/window-mean/drift/SeasonalNaive applicable: shared validation-selected baseline gate tersedia.
 - LSTM: safe checkpoint dan canonical targets.
 - River HST + ADWIN: orchestration dan smoke aktual tersedia melalui venv temporer; dependency tidak dipasang permanen.
 - Decision layer: rules/quality first dan abstain.
 
 ## Yang Belum Dikerjakan
 
-- training panjang;
-- public dataset benchmark penuh;
+- full repeated-seed CUDA rerun dengan evaluator baru;
+- public dataset benchmark penuh current methodology;
 - real sensor benchmark;
 - River benchmark pada data real;
 - Pi latency/RSS/power;

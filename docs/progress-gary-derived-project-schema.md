@@ -1,6 +1,6 @@
 # Progress Gary Derived Project Sensor Schema
 
-> **Historical v1 evidence.** Dokumen ini mempertahankan workflow proxy/sintetis lama untuk reproduksi eksperimen. Kontrak aktif adalah `compact_sensor.v2` dan `sensor_ai.v1`; lihat `data-contract.md`. Jangan gunakan hasil derived Gary sebagai bukti sensor RAB atau performa lapangan.
+> **Historical v1 evidence.** Dokumen ini mempertahankan workflow proxy/sintetis lama untuk reproduksi eksperimen. Kontrak firmware aktif adalah `compact_sensor.v3`; v2 hanya compatibility. Lihat `data-contract.md` dan ADR-001. Jangan gunakan hasil derived Gary sebagai bukti sensor RAB atau performa lapangan.
 
 ## Tujuan
 

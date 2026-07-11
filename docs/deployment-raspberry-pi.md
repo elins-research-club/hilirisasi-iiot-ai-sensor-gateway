@@ -7,9 +7,11 @@ Dokumen ini adalah contoh deployment, bukan bukti production readiness.
 - Raspberry Pi OS 64-bit;
 - Python environment proyek;
 - serial device/group permission;
-- config explicit;
-- writable state directory;
-- E32/receiver hardware bila live mode.
+- config explicit, termasuk `[preprocessing]` version/filter policy;
+- writable append-only state directory;
+- gateway clock/UTC policy;
+- E32/receiver hardware bila live mode;
+- firmware node v3 atau explicit v2 compatibility registry.
 
 Dependency commands hanya dijalankan user setelah review:
 
@@ -45,7 +47,7 @@ IIOT_CONFIG_FILE=/home/pi/iiot-ai-sensor-gateway/config/default.toml \
   --output-dir /var/lib/iiot-ai-sensor-gateway/real_live_logs
 ```
 
-Receiver menulis append-only audit trail.
+Receiver menulis append-only audit trail. Gateway menerima v3 hardware observation dan v2 compatibility; v2 tidak boleh difilter ulang secara default. Sebelum service live, replay satu golden v3/warm-up/error frame dan periksa provenance/version.
 
 ## Systemd Example
 
@@ -96,8 +98,9 @@ Repo saat ini belum menjalankan production publisher. Sebelum menambah MQTT serv
 
 Model tidak menjadi service default. Promotion memerlukan:
 
-- baseline gate;
-- real-data evaluation;
+- validation-selected applicable baseline gate;
+- cadence/horizon, active feature schema/hash, target degeneracy, clipping/saturation, dan target-coverage gate;
+- repeated-seed real-data evaluation;
 - safe checkpoint;
 - versioned artifact;
 - Pi latency/RSS measurement;
@@ -110,7 +113,9 @@ Model tidak menjadi service default. Promotion memerlukan:
 - restore previous unit/config backup;
 - preserve append-only data directory;
 - jangan hapus raw capture atau model artifact tanpa backup;
-- verify manual replay before restarting live.
+- verify manual replay before restarting live;
+- gateway rollback tetap membaca v2 selama migration window;
+- jangan menghapus L0 raw atau v2 parser pada hari cutover node terakhir.
 
 ## Belum Diverifikasi
 

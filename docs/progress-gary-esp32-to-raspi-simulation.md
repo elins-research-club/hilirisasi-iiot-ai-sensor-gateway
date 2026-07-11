@@ -1,6 +1,6 @@
 # Progress Gary ESP32-Like ke Raspberry Pi Preprocessing
 
-> **Historical v1 evidence.** Isi ini mendokumentasikan simulasi proxy lama, bukan firmware atau contract aktif. Gunakan `compact_sensor.v2`, `data-contract.md`, dan laporan foundation 2026-07-10 untuk implementasi saat ini.
+> **Historical v1 evidence.** Isi ini mendokumentasikan simulasi proxy lama, bukan firmware atau contract aktif. Current source memakai `compact_sensor.v3` hardware observation dan gateway-centric semantic preprocessing; lihat `data-contract.md`, ADR-001, dan laporan migrasi 11 Juli 2026.
 
 ## Tujuan
 

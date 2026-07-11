@@ -31,24 +31,28 @@ Nama modul CO analog lama hanya artefak desain terdahulu dan bukan target hardwa
 
 ESP32-C6 hanya menangani:
 
-- pembacaan sensor;
-- validasi ringan dan moving average;
-- status per sensor;
-- sequence dan boot identity;
-- payload `compact_sensor.v2`;
+- pembacaan sensor dan scheduling;
+- protocol/frame/checksum integrity;
+- warm-up/heater/fan state;
+- official vendor compensation dan conversion ke engineering unit;
+- broad hardware-impossibility gate, bukan project semantic threshold;
+- status per sensor, sequence, boot identity, time basis, firmware/config/calibration version;
+- payload `compact_sensor.v3` dengan `processing_profile=hardware_only`;
 - komunikasi LoRa.
+
+Semantic filtering, project validation, resampling, missing policy, feature engineering, normalization, windowing, model, dan final decision hanya berjalan di gateway. `compact_sensor.v2` tetap dibaca sebagai legacy node-preprocessed observation dan tidak difilter ulang secara default.
 
 AI utama tetap di Raspberry Pi/laptop/server Python. ESP32-C6 tidak menjalankan LSTM, FITS, DLinear, Half-Space Trees, atau model berat lain.
 
 ## State Aktual
 
 - Default firmware adalah environment `mock`; environment `hardware` terpisah.
-- Firmware mock menghasilkan payload v2 lengkap dan valid.
+- Firmware mock menghasilkan payload v3 hardware observation lengkap dan valid; v2 tetap parser-compatible untuk migration/replay.
 - Hardware path yang tersedia: SEN0466 ber-checksum, SEN0321 automatic-read, ADC terkalibrasi SEN0574, INA226, SC16IS752 dual-UART, MH-Z19 checksum/warm-up, PMS7003T passive-frame/checksum/warm-up, serta adapter Bosch BME68x SensorAPI. Profile BME dengan source resmi sudah compile-validated; default tetap disabled bila dependency lokal tidak ada. Semua jalur baru belum hardware-verified dan harus fail-closed.
 - E32 memakai UART1 dan AUX handshake. MH-Z19/PMS memakai channel A/B SC16IS752 dengan crystal 1.8432 MHz. Address, crystal, PCB, rail 5 V, dan level logic belum tervalidasi hardware.
 - Receiver real-live menulis append-only `raw_envelopes.jsonl`, `accepted_payloads.jsonl`, `rejected_payloads.jsonl`, dan `receiver_events.jsonl`, dengan atomic rotation.
 - Waktu node berbasis uptime tidak dianggap Unix epoch. Gateway menambahkan `receive_timestamp` dan `time_quality`.
-- Kontrak compact v2 memiliki stable `event_id`, `boot_id`, `sequence`, status per sensor, serta field RAB penuh.
+- Kontrak compact v3 memiliki stable `event_id`, `boot_id`, `sequence`, time basis, firmware/config/calibration provenance, status hardware per sensor, serta field RAB penuh.
 - Compact v1 hanya migration/reference dan dapat dimatikan melalui config.
 - `min_valid_ratio` digunakan sebelum windowing; `node_silent_after_sec` digunakan untuk node-health/status.
 - LSTM, FITS-inspired, DLinear, dan River streaming tetap `EXPERIMENTAL` sampai mengalahkan baseline dengan data real yang layak.
@@ -64,7 +68,7 @@ iot/{gateway_id}/status/sensor
 
 Topik status lama tanpa namespace domain hanya migration-only.
 
-Compact v2 fields:
+Compact v3 sensor fields:
 
 ```text
 tc,h,p,bme,co,n2mv,n2r,o3,co2,pm1,pm25,pm10,bv,bi,bp
@@ -80,7 +84,8 @@ Makna penting:
 
 Schema resmi:
 
-- `schemas/compact_sensor.v2.schema.json`
+- `schemas/compact_sensor.v3.schema.json` — hardware observation aktif;
+- `schemas/compact_sensor.v2.schema.json` — migration/legacy node-preprocessed;
 - `schemas/sensor_ai.v1.schema.json`
 - `schemas/sensor_status.v1.schema.json`
 
@@ -106,9 +111,12 @@ Aturan:
 Baseline gate wajib:
 
 - LastValue;
-- SeasonalNaive;
-- DLinear;
+- drift dan window-mean sederhana;
+- SeasonalNaive hanya bila period/window/horizon applicable dan tidak identik dengan LastValue;
+- DLinear sebagai challenger neural ringan;
 - Isolation Forest/rules bila relevan.
+
+Baseline dipilih pada validation split per target lalu dikunci untuk test. Dataset promotion gate wajib memeriksa cadence/horizon duration, target konstan, boundary saturation/clipping, active feature schema train-only, no-overlap/purge, dan target coverage.
 
 Model tambahan:
 

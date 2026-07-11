@@ -1,42 +1,56 @@
 # Kontrak Data Node Sensor
 
-Dokumen ini adalah sumber kontrak aktif untuk firmware, receiver Python, payload AI sensor, dan status sensor.
+Dokumen ini adalah sumber kontrak aktif firmware, receiver/parser Python, preprocessing gateway, payload AI sensor, dan status sensor.
 
-## 1. Compact Sensor v2 — ESP32-C6 ke Gateway
+## 1. Version Matrix
 
-Schema: `schemas/compact_sensor.v2.schema.json`.
+| Versi | Makna | Status |
+|---|---|---|
+| `compact_sensor.v1` | legacy/proxy reference | migration-only, dapat disabled |
+| `compact_sensor.v2` | legacy node-preprocessed observation | compatibility aktif, semantics tidak berubah |
+| `compact_sensor.v3` | hardware observation sebelum semantic preprocessing gateway | contract aktif firmware |
 
-Top-level:
+Perubahan v2 → v3 adalah perubahan makna sehingga wajib version bump. V2 tidak boleh diam-diam diartikan sebagai raw/hardware observation.
+
+## 2. `compact_sensor.v3`
+
+Schema: `schemas/compact_sensor.v3.schema.json`.
+
+### 2.1 Top-level
 
 | Field | Arti |
 |---|---|
-| `v` | versi compact, wajib `2` |
-| `gw` | gateway target/identity bila tersedia |
+| `v` | integer `3` |
+| `gw` | gateway target/identity opsional |
 | `n` | node ID |
 | `r` | room ID |
-| `ts` | uptime node atau waktu absolut |
+| `ts` | waktu menurut basis `tb` |
+| `tb` | `uptime_s`, `epoch_s`, `epoch_ms`, atau `rfc3339` |
 | `seq` | sequence per boot |
-| `bid` | boot ID baru tiap reboot |
-| `st` | `ok`, `degraded`, atau `sensor_error` |
-| `q` | `valid`, `partial`, atau `invalid` |
-| `f` | flags string dipisah `|` atau array string |
-| `ok` | status per sensor |
-| `radio` / `lora` | metadata inline opsional `rssi`/`snr`; wrapper-level `radio` lebih disarankan |
-| `s` | object pembacaan sensor |
+| `bid` | boot identity baru tiap reboot |
+| `pp` | wajib `hardware_only` |
+| `fw` | firmware version |
+| `cfg` | hardware/board config version |
+| `cal` | calibration version; placeholder harus diberi label `unverified` |
+| `hs` | hardware summary: `ok`, `warming`, `partial`, `error` |
+| `f` | flags string `|` atau array string |
+| `ok` | state per sensor |
+| `radio` | metadata `rssi`/`snr` opsional |
+| `s` | hardware observations dalam engineering units |
 
-Field sensor:
+### 2.2 Sensor fields
 
-| Compact | Canonical | Semantik |
+| Compact | Canonical | Unit/semantik |
 |---|---|---|
 | `tc` | `temperature_c` | °C |
 | `h` | `humidity_pct` | %RH |
 | `p` | `pressure_hpa` | hPa |
-| `bme` | `bme_gas_ohm` | gas resistance BME688, ohm |
-| `co` | `co_ppm` | CO SEN0466, ppm |
-| `n2mv` | `no2_raw_mv` | tegangan NO₂ SEN0574, mV |
+| `bme` | `bme_gas_ohm` | BME688 gas resistance, ohm |
+| `co` | `co_ppm` | SEN0466 ppm |
+| `n2mv` | `no2_raw_mv` | SEN0574 mV |
 | `n2r` | `no2_ratio` | rasio kualitatif terhadap baseline |
-| `o3` | `o3_ppm` | O₃, ppm |
-| `co2` | `co2_ppm` | CO₂, ppm |
+| `o3` | `o3_ppm` | O₃ ppm |
+| `co2` | `co2_ppm` | CO₂ ppm |
 | `pm1` | `pm1_ug_m3` | µg/m³ |
 | `pm25` | `pm25_ug_m3` | µg/m³ |
 | `pm10` | `pm10_ug_m3` | µg/m³ |
@@ -44,174 +58,229 @@ Field sensor:
 | `bi` | `current_ma` | mA |
 | `bp` | `power_mw` | mW |
 
-Aturan:
+Rules:
 
-- missing ditulis `null`;
-- nol hanya berarti pengukuran nol yang valid;
-- NO₂ tidak boleh dipromosikan menjadi ppm tanpa kalibrasi referensi;
-- status sensor parsial boleh diteruskan;
-- versi lain, bool sebagai angka, NaN/Inf, boot ID kosong, atau sequence negatif ditolak;
-- compact v1 hanya migration/reference dan dapat dimatikan.
+- missing/not-ready/invalid sensor value = `null`, bukan nol;
+- NO₂ tidak boleh dipromosikan menjadi ppm tanpa reference calibration;
+- bool, NaN, Inf, identity kosong, sequence negatif, unknown version/profile ditolak;
+- camera/ToF/distance field tidak diizinkan;
+- `hs` bukan semantic quality final;
+- node tidak menghasilkan moving average, imputation, feature, normalization, model output, final battery/node health, atau gateway event time.
 
-## 2. Time Policy
+### 2.3 Per-sensor hardware state
 
-`ts` numeric kecil dari firmware adalah uptime, bukan Unix epoch. Gateway membentuk:
+Schema mengizinkan:
 
-- `timestamp`: waktu authoritative untuk event;
+```text
+ok
+warming
+timeout
+checksum_error
+protocol_error
+range_error
+missing
+disabled
+error
+```
+
+Firmware encoder saat ini mempublikasikan `ok`, `warming`, atau generic `error`; flags/log masih membawa konteks tambahan. Reason code granular harus diverifikasi dan diperkaya berdasarkan hardware bring-up, bukan diarang pada mock.
+
+## 3. `compact_sensor.v2` Compatibility
+
+Schema: `schemas/compact_sensor.v2.schema.json`.
+
+V2 tetap bermakna:
+
+```text
+legacy node-preprocessed observation
+```
+
+Gateway default:
+
+```text
+processing_profile = legacy_node_preprocessed
+preprocessing_version = legacy_node_preprocessed.v2
+apply_to_v2 = false
+```
+
+Dengan demikian v2 tidak terkena double smoothing. V2 parser dipertahankan selama migration/rollback, tetapi firmware aktif menghasilkan v3.
+
+## 4. Time Policy
+
+Node membawa `ts` dan `tb`. Gateway membentuk:
+
+- `timestamp`: event-time authoritative yang digunakan downstream;
 - `source.node_timestamp`: nilai asli node;
 - `source.receive_timestamp`: waktu gateway menerima frame;
-- `source.time_quality`:
-  - `gateway_received` bila node memberi uptime/tidak punya waktu absolut;
-  - `node_epoch` bila node memberi epoch valid;
-  - `node_synced` bila node memberi waktu ISO/RFC3339 valid.
+- `source.time_basis`: basis node;
+- `source.time_quality`: `gateway_received`, `node_epoch`, atau `node_synced`.
 
-Gateway tidak boleh mengubah uptime 77 detik menjadi tanggal 1970.
+`uptime_s=77` tidak boleh menjadi tanggal 1970. Sequence gap, late, duplicate, out-of-order, dan reboot adalah semantics berbeda.
 
-## 3. Identity, Retry, dan Reboot
+## 5. Identity, Retry, Reboot
 
-Event ID diturunkan secara deterministik dari:
+Deterministic event identity berasal dari:
 
 ```text
-gateway_id + node_id + boot_id + sequence + node_timestamp + sensor data
+gateway_id + node_id + boot_id + sequence + node_timestamp + sensor content
 ```
 
-Konsekuensi:
+- retry frame sama → event ID sama;
+- boot ID baru → sequence boleh kembali nol;
+- duplicate/out-of-order dalam boot sama → fail-closed;
+- sequence gap → diterima dengan issue observability;
+- backend dedupe menggunakan event ID, bukan timestamp saja.
 
-- retry frame yang sama menghasilkan `event_id` sama;
-- reboot membentuk `boot_id` baru;
-- sequence boleh kembali ke nol setelah reboot;
-- duplicate dalam boot yang sama ditolak;
-- sequence lebih kecil dalam boot yang sama ditolak;
-- sequence gap diterima dengan issue observability.
+## 6. Canonical `SensorReading`
 
-## 4. Canonical Internal Record
-
-Parser menghasilkan `SensorReading` dengan:
+Parser mempertahankan:
 
 ```text
-schema_version,event_id,gateway_id,node_id,room_id,timestamp,
-receive_timestamp,node_timestamp,time_quality,boot_id,sequence,
-status,quality,flags,sensor_status,radio,source,sensor
+schema_version
+compact_version
+event_id
+gateway_id/node_id/room_id
+timestamp/receive_timestamp/node_timestamp
+time_quality/time_basis
+boot_id/sequence
+status/quality/flags/sensor_status/radio/source
+processing_profile
+firmware_version
+hardware_config_version
+calibration_version
+hardware_summary
+preprocessing_version
+source_event_id
+sensor
 ```
 
-Canonical record hanya menyatukan nama dan unit. Ia tidak mengisi field yang tidak ada.
+Canonical mapping tidak mengisi sensor yang tidak ada dan tidak mengubah unit reference dataset menjadi unit RAB.
 
-Field lama seperti proxy gas Gary tetap berada di lane migration/reference dan tidak disamakan dengan sensor RAB.
-
-## 5. `sensor_ai.v1`
-
-Schema: `schemas/sensor_ai.v1.schema.json`.
-
-Payload target ke topic data:
-
-```json
-{
-  "schema_version": "sensor_ai.v1",
-  "event_id": "se_...",
-  "gateway_id": "raspi_gateway_01",
-  "node_id": "esp32c6_node_01",
-  "room_id": "room_A",
-  "timestamp": "2026-07-10T06:00:00+00:00",
-  "source": {
-    "compact_version": 2,
-    "boot_id": "boot-a",
-    "sequence": 10,
-    "node_timestamp": 77,
-    "receive_timestamp": "2026-07-10T06:00:00+00:00",
-    "time_quality": "gateway_received",
-    "transport": "lora_serial",
-    "radio": {"rssi": null, "snr": null},
-    "sensor_status": {"bme688": "ok"},
-    "flags": []
-  },
-  "sensor": {
-    "temperature_c": 28.1,
-    "humidity_pct": 62.2,
-    "pressure_hpa": 1008.1,
-    "bme_gas_ohm": 18100.0,
-    "co_ppm": 2.1,
-    "no2_raw_mv": 423.0,
-    "no2_ratio": 1.01,
-    "o3_ppm": 0.03,
-    "co2_ppm": 655.0,
-    "pm1_ug_m3": 8.1,
-    "pm25_ug_m3": 12.2,
-    "pm10_ug_m3": 18.4,
-    "battery_voltage": 4.04,
-    "current_ma": 82.0,
-    "power_mw": 331.3
-  },
-  "ai": {
-    "env_status": "unknown",
-    "anomaly_score": null,
-    "forecast_status": "unavailable",
-    "main_factor": null,
-    "battery_status": "unknown",
-    "node_health": "healthy",
-    "confidence": null,
-    "abstain": true
-  },
-  "deployment": {"config_version": "sensor-foundation-v2"}
-}
-```
-
-AI default abstains sampai decision layer memiliki data/model yang layak.
-
-## 6. `sensor_status.v1`
-
-Schema: `schemas/sensor_status.v1.schema.json`.
-
-Status berisi:
-
-- gateway ID;
-- timestamp;
-- `online`, `degraded`, atau `offline`;
-- node ID/room/boot/sequence terakhir;
-- event ID terakhir;
-- receive time dan age;
-- node health.
-
-`node_silent_after_sec` menentukan kapan node menjadi `stale`.
-
-## 7. MQTT Topics
+## 7. Data Layers dan Provenance
 
 ```text
-data:   iot/{gateway_id}/data
-status: iot/{gateway_id}/status/sensor
+L0 raw transport payload/envelope
+L1 hardware observation
+L2 canonical/semantic observation
+L3 processed timeseries
+L4 model input/output/decision
 ```
 
-Topik status lama tanpa domain hanya migration-only. Data event tidak boleh retained; status dapat retained dan memiliki LWT bila publisher produksi ditambahkan. Status lama tidak boleh masuk event spool/replay.
+CLI replay menghasilkan:
 
-Repo saat ini menyediakan contract/schema/builder, bukan broker atau publisher produksi.
+```text
+raw_payloads.jsonl
+hardware_observations.jsonl
+canonical_observations.jsonl
+processed_timeseries.jsonl
+windows.jsonl
+lstm_windows.jsonl
+normalization_report.json
+```
 
-## 8. Validation dan Fail-Closed
+L3 memiliki `source_event_ids` dan `preprocessing_version`. Mixed preprocessing versions dalam bucket yang sama ditolak.
+
+## 8. Gateway Semantic Preprocessing
+
+Default config:
+
+```toml
+[preprocessing]
+version = "gateway_preprocess.v1"
+apply_to_v2 = false
+state_max_entries = 100000
+```
+
+State filter diisolasi oleh:
+
+```text
+gateway_id + node_id + boot_id + field
+```
+
+Resampling diisolasi oleh:
+
+```text
+gateway_id + node_id + room_id + time_bucket
+```
+
+Filter registry:
+
+```text
+none
+ema
+median
+moving_average   # compatibility/shadow only
+```
+
+Default raw-first memakai `none`. Filter production harus dipilih per sensor dari real hardware/noise/reference evidence.
+
+## 9. `sensor_ai.v1`
+
+Topic:
+
+```text
+iot/{gateway_id}/data
+```
+
+Payload membawa:
+
+- deterministic event ID;
+- source compact version/time/boot/sequence;
+- hardware/config/calibration/preprocessing provenance;
+- canonical sensor values;
+- AI decision/status;
+- deployment config version.
+
+AI harus abstain bila source invalid/stale/unavailable atau model/data gate tidak layak. Drift tidak otomatis berarti kondisi lingkungan bahaya.
+
+## 10. `sensor_status.v1`
+
+Topic:
+
+```text
+iot/{gateway_id}/status/sensor
+```
+
+Status retained, domain-specific, dan tidak masuk event outbox/replay. `node_silent_after_sec` menentukan stale/offline policy. Bare `iot/{gateway_id}/status` hanya migration-only.
+
+## 11. Validation dan Fail-Closed
 
 Hard invalid:
 
-- identity hilang;
-- tidak ada data sensor sama sekali;
-- value di luar sanity range;
-- status/quality error;
+- identity/contract/profile invalid;
+- tidak ada sensor observation;
+- value non-finite atau di luar configured semantic range;
+- invalid source status/quality;
 - duplicate/out-of-order;
-- schema/version/flags malformed;
-- timestamp absolut invalid.
+- invalid timestamp/time basis;
+- mixed preprocessing version dalam satu resampling bucket;
+- checkpoint/feature schema mismatch.
 
-Soft issue:
+Soft issues:
 
-- sensor tertentu missing;
+- sebagian sensor missing/warming;
 - sequence gap;
 - reboot;
-- compact v1 migration.
+- v1/v2 migration path;
+- clipping/out-of-domain telemetry yang belum melewati promotion threshold.
 
-Soft issue boleh diteruskan bila minimal ada data valid dan status sesuai. Downstream harus membaca issue/quality, bukan menganggap partial sebagai full-quality.
+## 12. Dataset Boundary
 
-## 9. Dataset Boundary
+- UCI CO mg/m³ tidak menjadi `co_ppm`;
+- UCI NO₂ µg/m³ tidak menjadi SEN0574 signal;
+- Bristol IAQ index tidak menjadi `bme_gas_ohm` atau CO₂;
+- Fidas PM adalah reference lane, bukan PMS7003T chip-identical;
+- missing tetap null;
+- public/synthetic lane tidak membuktikan deployment;
+- real RAB capture wajib untuk promotion/field claims.
 
-Dataset adapters harus menghasilkan canonical field hanya bila unit dan semantiknya sesuai. Contoh:
+## 13. Migration dan Rollback
 
-- CO UCI dalam mg/m³ tetap reference field, bukan `co_ppm`;
-- NO₂ UCI dalam µg/m³ tetap reference field, bukan sinyal SEN0574;
-- gas Bristol adalah IAQ index, bukan `bme_gas_ohm`;
-- missing dataset tetap `null`.
+- parser menerima v2/v3 secara eksplisit;
+- gateway v3 dapat di-deploy sebelum firmware v3;
+- firmware v3 rollout bertahap per node;
+- rollback firmware ke v2 tidak memerlukan rollback gateway;
+- raw L0 tetap source of truth untuk reprocessing;
+- v2 hanya retired setelah tidak ada active node v2 selama periode yang disepakati dan rollback artifact aman.
 
-Lihat `docs/dataset-catalog-and-adapters.md`.
+Lihat `docs/adr/ADR-001-gateway-centric-sensor-preprocessing.md`.

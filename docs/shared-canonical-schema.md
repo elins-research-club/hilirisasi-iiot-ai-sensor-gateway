@@ -1,14 +1,16 @@
 # Shared Canonical Schema
 
-Semua lane harus masuk ke canonical schema sebelum preprocessing/modeling:
+Semua lane masuk ke canonical schema sebelum semantic preprocessing/modeling:
 
 ```text
 simulation/reference adapter
 real offline adapter
 real live receiver
--> canonical SensorReading / dataset record
--> validation
--> resampling/features/normalization/windowing
+→ L0 raw payload/envelope
+→ L1 hardware observation / dataset record
+→ L2 canonical SensorReading + semantic validation
+→ L3 processed timeseries
+→ L4 model input/output
 ```
 
 ## Sensor Fields
@@ -31,63 +33,77 @@ current_ma
 power_mw
 ```
 
-Missing tetap `null`. Nilai nol tidak dipakai sebagai missing marker.
+Missing = `null`; nol bukan missing marker. NO₂ tidak memiliki canonical ppm field.
 
-## Metadata Runtime
+## Runtime Metadata
 
 ```text
-schema_version
-event_id
-gateway_id
-node_id
-room_id
-timestamp
-receive_timestamp
-node_timestamp
-time_quality
-boot_id
-sequence
-status
-quality
-flags
-sensor_status
-radio
-source
+schema_version / compact_version
+event_id / source_event_id
+gateway_id / node_id / room_id
+timestamp / receive_timestamp / node_timestamp
+time_quality / time_basis
+boot_id / sequence
+status / quality / hardware_summary
+flags / sensor_status / radio / source
+processing_profile
+firmware_version
+hardware_config_version
+calibration_version
+preprocessing_version
 ```
+
+Metadata provenance tidak boleh dibuang saat membentuk payload backend atau artifact modeling.
+
+## Version Semantics
+
+```text
+compact_sensor.v1 = legacy/proxy migration
+compact_sensor.v2 = legacy node-preprocessed observation
+compact_sensor.v3 = hardware observation before gateway semantic preprocessing
+```
+
+V2 tidak difilter ulang secara default. V3 wajib `processing_profile=hardware_only`.
 
 ## Reference/Migration Fields
 
-Field proxy lama seperti `voc_raw`, `bme_gas_raw`, `co_raw`, dan `gas_raw` hanya dipertahankan pada lane migration/reference. Field tersebut tidak boleh masuk event canonical v2 sebagai pengganti hardware RAB.
+`voc_raw`, `bme_gas_raw`, `co_raw`, dan `gas_raw` hanya lane migration/reference. Mereka tidak boleh menjadi pengganti field hardware RAB pada v3.
 
 ## Dataset Record
 
-Dataset adapter menggunakan `iiot.dataset_record.v1` dengan:
+`iiot.dataset_record.v1` memuat:
 
 - dataset/lane/record identity;
 - timestamp/device/site;
-- canonical `sensor` object;
-- unit-asli `reference` object;
-- quality;
-- provenance.
+- canonical sensor object;
+- source-unit `reference` object;
+- quality/provenance;
+- missing/cadence assumptions.
 
-Reference field tidak otomatis menjadi sensor field. Contoh:
+Reference field tidak otomatis menjadi sensor field:
 
-- CO mg/m³ tidak otomatis menjadi CO ppm;
-- NO₂ µg/m³ tidak otomatis menjadi sensor ratio;
-- IAQ index tidak otomatis menjadi gas resistance.
+- CO mg/m³ ≠ CO ppm;
+- NO₂ µg/m³ ≠ SEN0574 mV/ratio;
+- IAQ index ≠ gas resistance;
+- Fidas PM ≠ PMS7003T chip-identical.
 
-## Time dan Split
+## Time, Split, dan Feature Schema
 
-- runtime uptime memakai gateway receive time;
+- node uptime memakai gateway receive-time authority;
 - dataset timestamp mempertahankan timezone/source assumption;
-- sort time sebelum split;
-- normalizer fit pada train;
+- cadence diinfer per node atau dideklarasikan lalu divalidasi;
+- horizon disimpan sebagai steps dan duration;
+- split time-ordered + purge/no-overlap;
+- active feature schema dipilih train-only;
+- ordered feature manifest + SHA-256 disimpan;
+- normalizer/clipping report tidak memakai val/test untuk fit;
 - leave-device/site-out bila tersedia.
 
 ## Schema Files
 
-- `schemas/compact_sensor.v2.schema.json`
-- `schemas/sensor_ai.v1.schema.json`
-- `schemas/sensor_status.v1.schema.json`
+- `schemas/compact_sensor.v3.schema.json` — active hardware observation;
+- `schemas/compact_sensor.v2.schema.json` — migration compatibility;
+- `schemas/sensor_ai.v1.schema.json`;
+- `schemas/sensor_status.v1.schema.json`.
 
-Detail lengkap: `docs/data-contract.md`.
+Detail: `docs/data-contract.md` dan ADR-001.

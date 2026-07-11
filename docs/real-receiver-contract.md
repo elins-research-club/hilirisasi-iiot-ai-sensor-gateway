@@ -2,74 +2,95 @@
 
 ## Input
 
-Satu JSON object per baris, berupa:
+Satu JSON object per baris:
 
-- compact v2 langsung; atau
-- wrapper dengan `payload` dan optional `radio`.
+- compact v3 hardware observation;
+- compact v2 legacy node-preprocessed observation;
+- v1 migration bila config mengizinkan;
+- atau wrapper `payload` + optional `radio`.
 
-Compact v2 wajib memiliki:
+V3 wajib:
 
 ```text
-v=2,n,r,ts,seq,bid,st,q,f,ok,s
+v=3,n,r,ts,tb,seq,bid,pp,fw,cfg,cal,hs,f,ok,s
+pp=hardware_only
 ```
 
-`gw` optional bila gateway default disediakan config.
+V2 semantics tidak berubah dan tidak difilter ulang secara default.
 
 ## Time
 
-Receiver menetapkan waktu terima UTC. Uptime node tetap disimpan sebagai provenance dan tidak dianggap waktu kalender.
+Receiver menetapkan UTC receive time. `tb` dan node timestamp dipertahankan. Uptime tidak dianggap kalender/epoch.
 
 ## Accepted Record
 
 Accepted JSONL menyimpan:
 
-- raw line;
-- payload original;
+- raw line/payload asli;
 - canonical record;
 - event ID;
 - node/room/boot/sequence;
-- time quality;
+- node/receive timestamp, time basis, time quality;
+- processing profile;
+- firmware/config/calibration/preprocessing version;
+- hardware summary/sensor status/flags;
 - validation soft issues;
 - source/radio metadata.
 
 ## Rejected Record
 
-Rejected JSONL menyimpan:
+Rejected JSONL menyimpan raw line, receive time, source, category, error, dan validation issues bila tersedia. Secret tidak boleh ada di payload/log.
 
-- raw line;
-- receive time;
-- source metadata;
-- category;
-- error;
-- validation issues bila tersedia.
+Kategori utama:
 
-Kategori: empty, JSON decode, parse, atau validation.
+```text
+empty
+json_decode
+parse/schema/profile
+validation
+ordering/duplicate
+```
 
 ## Ordering
 
-- duplicate sequence dalam boot sama ditolak;
+- duplicate sequence/event ID pada boot sama ditolak;
 - sequence lebih kecil ditolak;
-- event ID duplicate ditolak;
-- sequence gap diterima dan dicatat;
-- boot ID berubah diterima sebagai reboot.
+- gap diterima dengan issue;
+- boot ID baru dianggap reboot;
+- gateway semantic filter state diisolasi per boot;
+- late/out-of-order tidak disamakan dengan missing.
 
-## Partial Data
+## Partial Hardware Observation
 
-Payload partial dapat diterima bila:
+Dapat diterima bila:
 
 - minimal satu sensor valid;
-- status/quality sesuai;
-- value yang ada finite dan dalam sanity range;
-- missing menjadi null/status, bukan angka palsu.
+- hardware summary/status sesuai;
+- nilai finite dan valid;
+- missing/warming/timeout menjadi null + state/flag;
+- NO₂ tidak difabrikasi menjadi ppm.
+
+Final semantic quality tetap ditentukan gateway.
 
 ## Persistence
 
-Raw/accepted/rejected/events append-only. Rotation memakai atomic rename. Receiver restart tidak truncate file lama.
+```text
+raw_envelopes.jsonl
+accepted_payloads.jsonl
+rejected_payloads.jsonl
+receiver_events.jsonl
+```
+
+Append-only, atomic rotation, restart tidak truncate. L0 raw menjadi source of truth untuk replay/reprocessing.
 
 ## Serial
 
-Serial source wajib memiliki timeout, idle sleep, reconnect, dan backoff. Port tidak tersedia atau disconnect tidak boleh menghasilkan tight loop.
+Serial source wajib timeout, idle sleep, reconnect, dan exponential backoff. Port kosong/disconnect tidak boleh tight loop.
+
+## Downstream Layering
+
+Receiver memberi L0/L1 ke pipeline. Replay pipeline menghasilkan L2/L3/L4 dan menyimpan `source_event_ids` + `preprocessing_version`. Mixed preprocessing version dalam bucket yang sama ditolak.
 
 ## Batas Transport
 
-Receiver belum mengonfigurasi radio E32 over-air parameter. Ia mengonsumsi newline JSON dari transparent serial/receiver bridge. Konfigurasi channel/address/air-rate/CRC radio fisik adalah hardware integration task.
+Receiver belum mengonfigurasi parameter E32 over-air. Ia mengonsumsi newline JSON dari transparent serial/bridge. Channel/address/air-rate/CRC/link budget/range/packet loss adalah hardware integration task.

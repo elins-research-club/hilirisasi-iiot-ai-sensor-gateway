@@ -1,5 +1,7 @@
 # Laporan Implementasi Sensor Node dan AI Gateway — 2026-07-10
 
+> **HISTORICAL V2 FOUNDATION SNAPSHOT — SUPERSEDED 11 JULI 2026.** Current source memakai `compact_sensor.v3` hardware observation, firmware tanpa semantic moving average, dan gateway-centric semantic preprocessing. Gunakan ADR-001 dan `gateway-centric-sensor-preprocessing-migration-report-2026-07-11.md` untuk current state. Isi v2 di bawah dipertahankan sebagai audit trail.
+
 ## Ringkasan
 
 Wave ini mengubah sensor gateway dari skeleton v1 menjadi fondasi `compact_sensor.v2` yang host-verified: receiver append-only, parser/validator fail-closed, waktu authoritative di gateway, full field RAB, firmware mock/hardware terpisah, dataset adapters ber-provenance, forecasting baseline/challenger, streaming anomaly/drift, decision layer, serta schema MQTT.

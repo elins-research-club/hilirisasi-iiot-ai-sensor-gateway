@@ -1,30 +1,84 @@
 # Perbandingan Model AI Sensor
 
+> **Methodology update 11 Juli 2026:** ranking CUDA lama di dokumen ini adalah historical artifact evidence dan **tidak boleh lagi dipakai untuk promotion**. Dataset/evaluator sekarang menginfer cadence, menyimpan horizon duration, memilih active feature schema dari train-only, memblokir target constant/saturated, mencatat clipping, memilih baseline per target pada validation split, menolak duplicate/inapplicable SeasonalNaive, dan membutuhkan repeated seeds. Semua artifact lama harus di-bake-off ulang dengan `scripts/laptop_bakeoff_runner.py` sebelum ranking diperbarui.
+
 Tanggal keputusan: 10 Juli 2026.
+Re-audit + laptop CUDA multi-lane bake-off: **11 Juli 2026**.
 
-Semua kandidat tetap **EXPERIMENTAL** sampai diuji pada data real proyek, time/device/site split, baseline gate, dan Raspberry Pi target.
+Status jujur:
 
-## Ranking Praktis
+- **Production promotion: BELUM.** Data real RAB + Pi latency/RSS/false-alert/day masih open.
+- Empat lane selesai: Gary, UCI, Fidas, dan simulator; semua training artifact mencatat `device: cuda`.
+- Ranking FITS/LSTM/DLinear lama tetap berguna sebagai diagnosis, tetapi cadence/baseline/schema/degenerate-target gate lama belum cukup ketat.
+- Simulator lama memiliki CO/CO₂/PM2.5 konstan pada test split; simulator v3 telah dibatasi rise/recovery, tetapi full CUDA bake-off baru belum dijalankan.
+- Laporan lengkap: `LAPTOP_CUDA_BAKEOFF_RESULTS_2026-07-11.md`.
+- Streaming native + River: wiring E2E OK, **EXPERIMENTAL** (bukan quality bake-off).
 
-| Rank | Model | Peran | Status implementasi | Alasan |
-|---|---|---|---|---|
-| 1 | Rules + quality gate | keselamatan, node/battery health | tersedia | paling deterministik dan dapat abstain |
-| 2 | LastValue / SeasonalNaive | forecast baseline | tersedia | wajib sebagai pembanding minimum |
-| 3 | DLinear | lightweight neural baseline | train/eval/predict tersedia | sederhana dan kuat sebagai gate trend/seasonal |
-| 4 | Native RobustZScore + PageHinkley | streaming anomaly + drift | E2E tersedia tanpa dependency tambahan | runnable di CI/edge, score-before-learn, tetap wajib warm-up dan evaluasi false alert |
-| 5 | River Half-Space Trees + ADWIN | streaming anomaly + drift challenger | orchestration + smoke aktual tersedia; dependency tidak dipasang permanen | online dan incremental, tetapi benchmark data nyata belum dijalankan |
-| 6 | FITS-inspired | forecast ringan berbasis frekuensi | train/eval/predict tersedia | kecil dan relevan untuk sinyal periodik, tetapi bukan otomatis terbaik |
-| 7 | LSTM | forecast nonlinear existing | tersedia dan safe-load | lebih kompleks; wajib mengalahkan baseline |
-| 8 | Isolation Forest window | anomaly batch/window | workflow baseline/research | mudah diuji, tetapi bukan streaming-native |
-| 9 | N-HiTS / boosting lag features | kandidat server/laptop | belum diimplementasikan | layak benchmark setelah dataset real cukup |
-| 10 | Autoencoder/USAD/transformer besar | anomaly/forecast lanjut | belum diimplementasikan | biaya, tuning, dan risiko overfit lebih tinggi |
+## Ranking Praktis Historical (sebelum methodology hardening)
 
-## Baseline Gate
+1. **Rules + quality gate** — safety / abstain (wajib L0)
+2. **LastValue / SeasonalNaive** — forecast baseline gate (wajib)
+3. **FITS-inspired residual** — kandidat edge paling konsisten; menang edge-model di Gary dan Fidas
+4. **DLinear residual** — neural baseline ringan; menang edge-model di UCI
+5. **LSTM residual** — challenger nonlinear; terbaik di Gary/UCI, MIXED pada Fidas/simulator
+6. **FITS official-style (`fits_official`)** — research comparator kecil; belum konsisten lintas target
+7. **Native RobustZScore + PageHinkley** — streaming anomaly/drift tanpa dep ekstra
+8. **River HST + ADWIN** — streaming challenger optional
+9. Isolation Forest window — batch AD research
+10. N-HiTS / boosting lags / USAD — belum atau cost lebih tinggi
+
+Status PROMISING selalu **per lane**, bukan global dan bukan production.
+
+## Optimasi yang diterapkan (kode)
+
+File utama: `edge_forecasting.py`, `forecasting.py`, `cli.py`.
+
+- **DLinear bugfix:** prediksi absolut diganti **residual di atas last value** + zero-init (smoke lama skill ≈ −118 karena 1 epoch + absolute head).
+- **FITS:** zero-init residual head (start ≈ LastValue).
+- **Training:** AdamW, SmoothL1, grad clip, ReduceLROnPlateau, weight decay.
+- **LSTM:** default strategy **`residual`** (CLI + API), dropout 0.1, residual-friendly head init.
+- Model version edge: `*_edge_v2`.
+
+## Bake-off evidence (simulator)
+
+Lokasi artifact (tidak di-commit): `/tmp/iiot-model-opt-bakeoff/`.
+
+Dataset:
+
+- 7200 payload compact v2 (`simulate mixed`, 3 node)
+- 7167 windows → 7056 forecast samples
+- split temporal **5004 / 1038 / 1014**, window 12, horizon 5, purge 5
+
+Forecast test (normalized overall RMSE vs best baseline LastValue 0.003680):
+
+- **FITS v2:** RMSE **0.002491**, skill **+0.323**, wins **6/7**, gate **PASS**, readiness **PROMISING**, params 693, best_epoch 3 / 15 ran
+- **DLinear v2:** RMSE **0.002816**, skill **+0.235**, wins **6/7**, gate **PASS**, readiness **PROMISING**, params 182, best_epoch 79 / 80 ran
+- **LSTM residual:** RMSE **0.003567**, skill **+0.031**, wins **2/7**, gate **FAIL**, readiness **EXPERIMENTAL**, status MIXED
+
+Perbandingan smoke lama (240 payload, 1 epoch, before fix):
+
+- FITS skill **−0.43** (gagal)
+- DLinear skill **−118** (ambruk; bukan “DLinear jelek selamanya”)
+
+Streaming (400 sample feature stream, EXPERIMENTAL):
+
+- native: processed 400, rejected 0, anomalies 0, drift_events **3**
+- River HST+ADWIN (isolated venv): processed 400, rejected 0, anomalies 0, drift_events 0
+
+Host inference (bukan Pi claim): FITS ~0.0024 ms/sample, DLinear ~0.0015 ms/sample on current host.
+
+## Baseline dan Data-Quality Gate Current
+
+Baseline candidates: LastValue, window mean, drift, dan SeasonalNaive bila applicable. Kandidat identik tidak dihitung dua kali. Baseline dipilih per target pada validation split dan baru dievaluasi terkunci pada test.
 
 Forecast candidate tidak dipromosikan bila:
 
-- overall test RMSE tidak mengalahkan baseline terbaik;
-- mayoritas target tidak menang;
+- test model tidak mengalahkan validation-selected baseline;
+- effective target coverage tidak cukup atau mayoritas effective target tidak menang;
+- target train/test constant atau boundary-saturated;
+- cadence/horizon metadata tidak valid;
+- clipping/out-of-domain rate melampaui gate;
+- checkpoint ordered feature schema/hash tidak cocok;
 - hanya bagus pada synthetic/reference lane;
 - split berpotensi leakage;
 - performa lintas device/site buruk;
@@ -33,7 +87,7 @@ Forecast candidate tidak dipromosikan bila:
 Status:
 
 - `EXPERIMENTAL`: baru smoke/limited evaluation;
-- `PROMISING`: lulus baseline gate pada satu dataset yang layak;
+- `PROMISING`: lulus baseline gate pada satu dataset yang layak (**sim bake-off FITS/DLinear = PROMISING sim only**);
 - `VALIDATED`: lulus repeated real-data evaluation dan target-device benchmark;
 - `PRODUCTION`: hanya setelah deployment acceptance/rollback/monitoring.
 
@@ -114,7 +168,9 @@ Perbaikan:
 - safe checkpoint `weights_only=True`;
 - strict state-dict load;
 - baseline comparison;
-- status experimental bila kalah.
+- default train strategy **residual** (bukan absolute);
+- dropout / AdamW / grad clip / LR schedule;
+- status experimental bila kalah baseline atau kalah FITS/DLinear.
 
 ## Decision Layer
 
@@ -160,12 +216,18 @@ Label hardware wajib. Angka host tidak boleh ditulis sebagai angka Raspberry Pi.
 
 ## Kesimpulan
 
-Pilihan terbaik saat ini bukan satu model tunggal. Stack yang paling aman:
+Pilihan terbaik saat ini **bukan** satu model tunggal. Stack yang paling aman setelah multi-lane bake-off:
 
 ```text
 L0 rules + quality + abstain
-L1 LastValue/SeasonalNaive/DLinear + streaming anomaly/drift
-L2 FITS-inspired atau LSTM bila lulus baseline gate
+L1 LastValue/SeasonalNaive + native streaming anomaly/drift
+L2 FITS-inspired primary edge + DLinear neural baseline
+L3 LSTM residual sebagai challenger nonlinear per lane
+L4 FITS official-style + River sebagai research challengers
 ```
 
-Promosi final menunggu real sensor data dan pengukuran Raspberry Pi.
+**Historical candidate signal:** FITS-inspired dan LSTM menunjukkan hasil menarik pada sebagian lane, tetapi belum boleh diranking ulang sebelum bake-off repeated-seed dengan evaluator baru selesai.
+
+**Current engineering priority:** validitas dataset/evaluator dan real RAB capture lebih penting daripada menambah model baru.
+
+**Bukan pemenang production:** seluruh hasil masih proxy/simulation. Promosi final menunggu bake-off ulang, data sensor RAB, repeated seeds, leave-device/site evaluation, real-label false-alert/day/delay, dan pengukuran Raspberry Pi. Artifact lama tidak dihapus, tetapi readiness-nya tetap `EXPERIMENTAL`.

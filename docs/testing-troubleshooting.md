@@ -1,26 +1,58 @@
 # Testing dan Troubleshooting
 
-## Verifikasi Host
+## Verification Bundle
 
 ```bash
 cd /home/ubuntu/projects/iiot-project/iiot-ai-sensor-gateway
 PY=/home/ubuntu/.hermes/hermes-agent/venv/bin/python3
+export PYTHONPATH=src
 
-$PY -m compileall -q src tests run_gateway.py scripts/download_dataset.py
+$PY -m compileall -q src tests scripts run_gateway.py
 $PY -m unittest discover -s tests -p 'test_*.py' -q
 $PY run_gateway.py check-config --config config/default.toml
+$PY -c "import json,pathlib; [json.loads(p.read_text()) for p in pathlib.Path('schemas').glob('*.json')]"
 git diff --check
 ```
 
-## Firmware
+Guards:
+
+```bash
+rg -n 'MovingAverage|PreprocessedSample|class Preprocessor' \
+  firmware/esp32-c6-sensor-node/src firmware/esp32-c6-sensor-node/include
+
+rg -n 'distance_mm|"dist"|VL53|SEN0377' \
+  src firmware/esp32-c6-sensor-node/src \
+  firmware/esp32-c6-sensor-node/include schemas
+```
+
+Expected active source: tidak ada hasil.
+
+## Firmware Compile
 
 ```bash
 cd firmware/esp32-c6-sensor-node
 /home/ubuntu/.venvs/platformio/bin/pio run -e mock
 /home/ubuntu/.venvs/platformio/bin/pio run -e hardware
+/home/ubuntu/.venvs/platformio/bin/pio run -e hardware-bme68x
 ```
 
-`mock` adalah acceptance CI. `hardware` hanya compile/profile gate; tidak membuktikan sensor atau board.
+`mock`/`hardware`/`hardware-bme68x` hanya compile evidence. Sensor/bridge/E32/rail/flash/calibration/power tetap hardware open.
+
+## Contract v3 Targeted Tests
+
+```bash
+$PY -m unittest discover -s tests -p 'test_gateway_preprocessing_v3.py' -v
+```
+
+Expected coverage:
+
+- v3 provenance;
+- `pp=hardware_only` required;
+- no ToF/distance;
+- filter state isolation per node/boot;
+- v2 no double smoothing;
+- resampling does not mix nodes;
+- mixed preprocessing version rejected.
 
 ## Receiver Replay
 
@@ -31,7 +63,7 @@ $PY run_gateway.py receive-real-live \
   --max-messages 8
 ```
 
-Periksa:
+Periksa append-only files:
 
 ```text
 raw_envelopes.jsonl
@@ -40,132 +72,170 @@ rejected_payloads.jsonl
 receiver_events.jsonl
 ```
 
-Jalankan command dua kali pada output dir yang sama. Line lama harus tetap ada.
+Jalankan dua kali; line lama tidak boleh hilang.
 
-## Compact v2 Contract
+## L0–L4 Replay
+
+```bash
+$PY run_gateway.py simulate --scenario mixed --count 240 --nodes 2 --interval-sec 60 --output /tmp/iiot-v3.jsonl
+$PY run_gateway.py run --input-file /tmp/iiot-v3.jsonl --output-dir /tmp/iiot-v3-processed
+```
 
 Expected:
 
-- full field v2 parse;
-- uptime memakai receive time;
-- stable event ID;
-- duplicate/out-of-order ditolak;
-- reboot diterima;
-- partial sensor accepted dengan issue;
-- unsupported version/flags malformed ditolak.
+```text
+raw_payloads.jsonl
+hardware_observations.jsonl
+canonical_observations.jsonl
+processed_timeseries.jsonl
+windows.jsonl
+lstm_windows.jsonl
+normalization_report.json
+```
+
+Periksa `source_event_ids` dan `preprocessing_version` pada L3.
+
+## Dataset Quality Tests
+
+```bash
+$PY -m unittest discover -s tests -p 'test_dataset_quality_and_baselines.py' -v
+```
+
+Coverage:
+
+- cadence inference;
+- integer-multiple gap vs irregular cadence;
+- declared cadence conflict;
+- horizon duration;
+- train-only active feature schema/hash;
+- constant/near-constant target;
+- boundary saturation/clipping;
+- SeasonalNaive applicability;
+- duplicate baseline exclusion;
+- bounded simulator.
+
+### Cadence conflict
+
+Bila hourly dataset diberi `--cadence-sec 60`, preparation harus gagal. Gunakan `--cadence-sec 0` untuk infer atau berikan nilai yang benar.
+
+### Too irregular
+
+Periksa timezone, duplicate timestamp, DST, multi-node grouping, missing row, dan adapter cadence policy. Jangan memaksa 60 detik hanya agar pipeline lanjut.
+
+### Target blocked
+
+`data_quality.blocked_targets` menjelaskan `train_near_constant`, `test_near_constant`, atau `*_boundary_saturation`. Model dapat dilatih untuk diagnosis, tetapi tidak boleh PROMISING.
+
+### Feature schema mismatch
+
+Checkpoint dan dataset wajib memiliki ordered feature schema/hash sama. Live window boleh memiliki superset; inference hanya memilih feature yang dilatih dan fail-closed bila feature wajib hilang.
+
+## Forecast Evaluation
+
+```bash
+$PY run_gateway.py train-edge-forecast --dataset <NPZ> --output-dir <DIR> --model-type dlinear
+$PY run_gateway.py evaluate-edge-forecast --dataset <NPZ> --model <DIR>/model.pt --seasonal-period <PERIOD>
+
+$PY run_gateway.py train-lstm-forecast --dataset <NPZ> --output-dir <DIR> --forecast-strategy residual
+$PY run_gateway.py evaluate-lstm-forecast --dataset <NPZ> --model <DIR>/model.pt --seasonal-period <PERIOD>
+```
+
+Periksa:
+
+- `baseline_selection_split=val`;
+- `selected_by_target`;
+- inapplicable/duplicate baseline reasons;
+- `data_quality_passed`;
+- effective target count;
+- horizon duration;
+- normalized dan denormalized per-target metrics;
+- model readiness.
+
+Test set tidak boleh memilih baseline.
+
+## Anomaly/Drift Harness
+
+```bash
+$PY run_gateway.py inject-anomaly-fixture --output /tmp/anomaly-fixture.jsonl --labels /tmp/anomaly-labels.json
+$PY run_gateway.py stream-detect --backend native --input /tmp/anomaly-fixture.jsonl --output /tmp/anomaly-detections.jsonl --feature-names temperature_c,pm25_ug_m3
+$PY run_gateway.py benchmark-anomaly-events --detections /tmp/anomaly-detections.jsonl --labels /tmp/anomaly-labels.json --output /tmp/anomaly-benchmark.json --merge-gap-sec 60 --match-tolerance-sec 120
+```
+
+Output fixture hanya harness evidence. Field accuracy memerlukan label real. Drift event tidak otomatis bahaya lingkungan.
+
+## Laptop Runner Dry-Run
+
+```bash
+$PY scripts/laptop_bakeoff_runner.py \
+  --dry-run --lanes sim --seeds 42 --skip-public-prepare --skip-lstm
+```
+
+Dry-run harus menulis state plan tanpa membuat model/data besar. Real runner memakai atomic state dan output fingerprint.
 
 ## Serial CPU/Reconnect
 
-Unit test membuktikan explicit sleep dan reconnect backoff dipanggil. Untuk hardware:
+Unit test membuktikan sleep/backoff dipanggil. Hardware acceptance:
 
-1. jalankan receiver pada port nyata;
+1. jalankan port nyata;
 2. cabut radio/USB;
-3. pastikan process tidak tight-loop;
+3. pastikan tidak tight-loop;
 4. pasang kembali;
 5. pastikan reconnect;
-6. ukur CPU dengan alat OS target.
-
-Jangan mengklaim CPU bounded pada Pi hanya dari fake-source test.
-
-## Dataset Adapter
-
-Describe catalog:
-
-```bash
-$PY scripts/download_dataset.py uci_air_quality_360 --describe-only
-```
-
-Adapter fixture diuji oleh unittest. Untuk archive asli, catat:
-
-- source checksum;
-- row count;
-- reject count;
-- missing rate;
-- timezone;
-- unit/provenance.
-
-## Edge Models
-
-Smoke tests melatih FITS-inspired dan DLinear pada fixture kecil. Ini bukan benchmark.
-
-Actual run:
-
-```bash
-$PY run_gateway.py train-edge-forecast --dataset <NPZ> --output-dir <DIR> --model-type fits
-$PY run_gateway.py evaluate-edge-forecast --dataset <NPZ> --model <DIR>/model.pt
-```
-
-Periksa `baseline_gate`, bukan hanya loss.
-
-## Optional River
-
-Bila belum terpasang, command harus gagal dengan pesan dependency yang actionable, bukan traceback tak jelas.
-
-```bash
-python -m pip install -e '.[streaming]'
-```
-
-Jangan install otomatis dalam automation tanpa izin.
+6. ukur CPU/RSS pada Pi target.
 
 ## Masalah Umum
 
-### Config tidak ditemukan
+### Receiver menolak v3
 
-Gunakan path eksplisit:
+Periksa:
 
-```bash
-$PY run_gateway.py check-config --config config/default.toml
+- semua required metadata ada;
+- `pp=hardware_only`;
+- boot ID/sequence valid;
+- `tb` valid;
+- sensor states/schema valid;
+- no NaN/Inf;
+- no duplicate/out-of-order.
+
+### V2 double smoothing
+
+Pastikan:
+
+```toml
+[preprocessing]
+apply_to_v2 = false
 ```
 
-Config missing harus fail-closed.
-
-### Receiver menolak payload
-
-Periksa category:
-
-- JSON malformed;
-- version tidak didukung;
-- boot ID hilang;
-- flags bukan string/list;
-- value non-finite/range invalid;
-- duplicate/out-of-order;
-- status/quality error.
+V2 harus diberi `legacy_node_preprocessed.v2`.
 
 ### Uptime menjadi 1970
 
-Itu bug. Compact numeric uptime harus menghasilkan `time_quality=gateway_received` dan timestamp sama dengan receive time.
+Bug. `tb=uptime_s` harus memakai gateway receive-time authority.
 
-### Flash warning mismatch
+### Mixed preprocessing version bucket
 
-Pastikan build memakai environment dan sdkconfig terpisah:
+Pipeline sengaja gagal. Jangan average records dari config/version berbeda. Pisahkan activation boundary atau replay per version.
 
-```bash
-pio run -e mock -t clean
-pio run -e mock
-pio run -e hardware -t clean
-pio run -e hardware
-```
+### Clipping tinggi
 
-Profile 16 MB masih harus dicocokkan dengan chip fisik.
+Jangan hanya memperlebar physical range atau menyembunyikan outlier. Verifikasi unit/domain, lane reference, calibration, transform/log1p/robust strategy, dan promotion threshold.
 
-### Hardware build sukses tetapi semua sensor null
+### Hardware build sukses tetapi semua null
 
-Normal untuk driver yang belum selesai/board tidak terpasang. Hardware mode fail-closed dan tidak mengisi placeholder.
+Compile bukan hardware validation. Periksa wiring, power, I²C/UART, warm-up, address, bridge, dan calibration.
 
 ### MQTT tidak publish
 
-Repo belum memiliki production MQTT publisher. Hanya contract/schema/builder yang tersedia.
+Sensor production publisher/outbox/LWT/TLS belum E2E. Repo saat ini menyediakan contract/schema/builder.
 
-## Acceptance Hardware Belum Selesai
+## Acceptance Hardware Masih Open
 
-- board pin/flash;
-- I²C addresses;
-- ADC calibration;
-- UART bridge;
-- 5 V rails;
-- sensor warm-up;
-- E32 link;
-- shunt/calibration INA226;
-- real dataset;
-- Pi resource metrics;
-- multi-day soak.
+- real v3 payload board;
+- I²C/ADC/UART/SC16IS752;
+- warm-up/errors;
+- E32 packet loss/range/recovery;
+- rail/current/thermal;
+- calibration/reference;
+- Pi resource benchmark;
+- broker/TLS/ACL;
+- 24–72 jam soak.
