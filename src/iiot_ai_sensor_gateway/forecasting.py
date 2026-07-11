@@ -10,7 +10,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .dataset_quality import (
+    array_quality_report,
+    finite_or_raise,
+    infer_cadence,
+    select_active_features,
+)
 from .features import FEATURE_NAMES
+from .forecast_baselines import (
+    baseline_candidates,
+    compose_selected_baseline,
+    select_baseline_per_target,
+)
 from .normalization import DEFAULT_RANGES
 
 TARGET_NAMES = (
@@ -70,6 +81,9 @@ class ForecastDatasetStats:
     output_meta: str
     horizon_steps: int
     resample_interval_sec: int
+    cadence_seconds: float
+    horizon_duration_seconds: float
+    cadence_diagnostics: dict[str, Any]
     window_size: int
     purge_gap_steps: int
     feature_names: tuple[str, ...]
@@ -86,6 +100,8 @@ class ForecastDatasetStats:
     end_timestamp: str | None
     split_time_range: dict[str, Any]
     normalization_ranges: dict[str, tuple[float, float]]
+    feature_manifest: dict[str, Any]
+    data_quality: dict[str, Any]
     created_at: str
 
     def as_dict(self) -> dict[str, Any]:
@@ -160,8 +176,11 @@ def _split_counts(total: int, train_ratio: float, val_ratio: float) -> tuple[int
 
 def _ensure_feature_names(records: list[dict[str, Any]]) -> tuple[str, ...]:
     feature_names = tuple(records[0]["feature_names"])
-    if feature_names != FEATURE_NAMES:
-        raise ValueError("window feature_names do not match pipeline FEATURE_NAMES")
+    # Allow lane-local feature schemas (e.g. legacy Gary 16-feature windows) as
+    # long as every record is consistent. Target selection still requires the
+    # requested target names to exist inside the chosen feature schema.
+    if not feature_names:
+        raise ValueError("window feature_names must be non-empty")
     for record in records:
         if tuple(record["feature_names"]) != feature_names:
             raise ValueError("mixed feature_names in window dataset")
@@ -322,10 +341,13 @@ def prepare_forecast_dataset(
     train_ratio: float = 0.70,
     val_ratio: float = 0.15,
     target_names: tuple[str, ...] = TARGET_NAMES,
-    resample_interval_sec: int = 60,
+    resample_interval_sec: int | None = None,
     window_size: int | None = None,
     purge_gap_steps: int | None = None,
     normalization_ranges: dict[str, tuple[float, float]] | None = None,
+    cadence_relative_tolerance: float = 0.10,
+    max_irregular_fraction: float = 0.05,
+    near_constant_epsilon: float = 1e-8,
 ) -> ForecastDatasetStats:
     if horizon_steps < 1:
         raise ValueError("horizon_steps must be >= 1")
@@ -333,8 +355,20 @@ def prepare_forecast_dataset(
     records = _read_window_records(windows_jsonl)
     selected_window_size = window_size or int(records[0]["shape"][0])
     records = _rebuild_windows(records, selected_window_size)
-    feature_names = _ensure_feature_names(records)
-    target_indices = tuple(feature_names.index(name) for name in target_names)
+    source_feature_names = _ensure_feature_names(records)
+    missing_targets = [name for name in target_names if name not in source_feature_names]
+    if missing_targets:
+        raise ValueError(f"forecast targets missing from feature schema: {missing_targets}")
+    source_target_indices = tuple(source_feature_names.index(name) for name in target_names)
+    cadence = infer_cadence(
+        records,
+        declared_interval_sec=(
+            float(resample_interval_sec) if resample_interval_sec is not None else None
+        ),
+        relative_tolerance=cadence_relative_tolerance,
+        max_irregular_fraction=max_irregular_fraction,
+    )
+    cadence_seconds = float(cadence["cadence_seconds"])
     selected_purge_gap = horizon_steps if purge_gap_steps is None else purge_gap_steps
     if selected_purge_gap < 0:
         raise ValueError("purge_gap_steps must be >= 0")
@@ -356,7 +390,7 @@ def prepare_forecast_dataset(
     ends: list[str] = []
     for node_id in sorted(by_node):
         node_records = sorted(by_node[node_id], key=lambda item: _parse_dt(item["end_timestamp"]))
-        samples = _make_samples(node_records, horizon_steps, target_indices)
+        samples = _make_samples(node_records, horizon_steps, source_target_indices)
         split_samples = _assign_temporal_splits(samples, train_ratio, val_ratio, selected_purge_gap)
         for split, items in split_samples.items():
             for sample in items:
@@ -376,33 +410,55 @@ def prepare_forecast_dataset(
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     merged_ranges = _merged_ranges(normalization_ranges)
     np_arrays = {name: np.asarray(value, dtype=np.float32) for name, value in arrays.items()}
+    finite_or_raise(np_arrays)
+
+    feature_manifest = select_active_features(
+        np_arrays["X_train"],
+        source_feature_names,
+        target_names,
+        near_constant_epsilon=near_constant_epsilon,
+    )
+    active_indices = np.asarray(feature_manifest.pop("active_indices"), dtype=np.int64)
+    feature_names = tuple(feature_manifest["ordered_features"])
+    for split in ("train", "val", "test"):
+        np_arrays[f"X_{split}"] = np_arrays[f"X_{split}"][:, :, active_indices]
+    target_indices = tuple(feature_names.index(name) for name in target_names)
+    data_quality = array_quality_report(np_arrays, target_names)
+
     created_at = _utc_now()
     total_samples = sum(int(np_arrays[name].shape[0]) for name in ("X_train", "X_val", "X_test"))
     input_shape = tuple(int(item) for item in np_arrays["X_train"].shape[1:])
     target_shape = tuple(int(item) for item in np_arrays["y_train"].shape[1:])
+    compatibility_interval = int(round(cadence_seconds))
+    horizon_duration_seconds = cadence_seconds * horizon_steps
     stats = ForecastDatasetStats(
-        str(windows_jsonl),
-        str(output_path),
-        str(meta_path),
-        horizon_steps,
-        resample_interval_sec,
-        selected_window_size,
-        selected_purge_gap,
-        feature_names,
-        target_names,
-        target_indices,
-        total_samples,
-        int(np_arrays["X_train"].shape[0]),
-        int(np_arrays["X_val"].shape[0]),
-        int(np_arrays["X_test"].shape[0]),
-        (total_samples, input_shape[0], input_shape[1]),
-        (total_samples, target_shape[0]),
-        tuple(sorted(by_node)),
-        min(starts) if starts else None,
-        max(ends) if ends else None,
-        split_time_range,
-        merged_ranges,
-        created_at,
+        source_windows=str(windows_jsonl),
+        output_npz=str(output_path),
+        output_meta=str(meta_path),
+        horizon_steps=horizon_steps,
+        resample_interval_sec=compatibility_interval,
+        cadence_seconds=cadence_seconds,
+        horizon_duration_seconds=horizon_duration_seconds,
+        cadence_diagnostics=cadence,
+        window_size=selected_window_size,
+        purge_gap_steps=selected_purge_gap,
+        feature_names=feature_names,
+        target_names=target_names,
+        target_indices=target_indices,
+        total_samples=total_samples,
+        train_samples=int(np_arrays["X_train"].shape[0]),
+        val_samples=int(np_arrays["X_val"].shape[0]),
+        test_samples=int(np_arrays["X_test"].shape[0]),
+        input_shape=(total_samples, input_shape[0], input_shape[1]),
+        target_shape=(total_samples, target_shape[0]),
+        nodes=tuple(sorted(by_node)),
+        start_timestamp=min(starts) if starts else None,
+        end_timestamp=max(ends) if ends else None,
+        split_time_range=split_time_range,
+        normalization_ranges=merged_ranges,
+        feature_manifest=feature_manifest,
+        data_quality=data_quality,
+        created_at=created_at,
     )
     dataset_meta = stats.as_dict()
     np.savez_compressed(
@@ -412,9 +468,15 @@ def prepare_forecast_dataset(
         target_names=np.asarray(target_names),
         target_indices=np.asarray(target_indices, dtype=np.int64),
         horizon_steps=np.asarray([horizon_steps], dtype=np.int64),
-        resample_interval_sec=np.asarray([resample_interval_sec], dtype=np.int64),
+        resample_interval_sec=np.asarray([compatibility_interval], dtype=np.int64),
+        cadence_seconds=np.asarray([cadence_seconds], dtype=np.float64),
+        horizon_duration_seconds=np.asarray([horizon_duration_seconds], dtype=np.float64),
         window_size=np.asarray([selected_window_size], dtype=np.int64),
         purge_gap_steps=np.asarray([selected_purge_gap], dtype=np.int64),
+        feature_schema_sha256=np.asarray([feature_manifest["schema_sha256"]]),
+        feature_manifest_json=np.asarray([json.dumps(feature_manifest, sort_keys=True)]),
+        data_quality_json=np.asarray([json.dumps(data_quality, sort_keys=True)]),
+        cadence_diagnostics_json=np.asarray([json.dumps(cadence, sort_keys=True)]),
         normalization_ranges_json=np.asarray([_json_ranges(merged_ranges)]),
         dataset_meta_json=np.asarray([json.dumps(dataset_meta, sort_keys=True)]),
     )
@@ -429,14 +491,35 @@ def _device_name(requested: str) -> str:
     return requested
 
 
-def build_lstm_forecaster(input_size: int, output_size: int, hidden_size: int = 64, num_layers: int = 1):
+def build_lstm_forecaster(
+    input_size: int,
+    output_size: int,
+    hidden_size: int = 64,
+    num_layers: int = 1,
+    dropout: float = 0.0,
+):
     _torch, nn, _loader, _dataset = _require_torch()
+    if hidden_size < 1 or num_layers < 1:
+        raise ValueError("hidden_size and num_layers must be >= 1")
+    if not 0.0 <= dropout < 1.0:
+        raise ValueError("dropout must be in [0, 1)")
 
     class LSTMForecaster(nn.Module):
         def __init__(self) -> None:
             super().__init__()
-            self.lstm = nn.LSTM(input_size, hidden_size, num_layers=num_layers, batch_first=True)
+            self.lstm = nn.LSTM(
+                input_size,
+                hidden_size,
+                num_layers=num_layers,
+                batch_first=True,
+                dropout=dropout if num_layers > 1 else 0.0,
+            )
             self.head = nn.Linear(hidden_size, output_size)
+            # Residual-friendly start: near-zero head keeps early predictions near baseline.
+            nn.init.xavier_uniform_(self.lstm.weight_ih_l0)
+            nn.init.orthogonal_(self.lstm.weight_hh_l0)
+            nn.init.zeros_(self.head.weight)
+            nn.init.zeros_(self.head.bias)
 
         def forward(self, x):
             output, _hidden = self.lstm(x)
@@ -466,13 +549,18 @@ def train_lstm_forecast(
     seed: int = 42,
     device: str = "auto",
     model_version: str = MODEL_VERSION,
-    forecast_strategy: str = "absolute",
+    forecast_strategy: str = "residual",
+    dropout: float = 0.1,
+    weight_decay: float = 1e-4,
+    grad_clip_norm: float = 1.0,
 ) -> dict[str, Any]:
     np = _require_numpy()
     torch, nn, DataLoader, TensorDataset = _require_torch()
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    if weight_decay < 0 or grad_clip_norm < 0:
+        raise ValueError("weight_decay and grad_clip_norm must be non-negative")
 
     data = np.load(dataset_npz, allow_pickle=False)
     X_train = data["X_train"].astype("float32")
@@ -494,11 +582,28 @@ def train_lstm_forecast(
         y_train_fit = y_train - X_train[:, -1, target_indices]
         y_val_fit = y_val - X_val[:, -1, target_indices]
 
-    model = build_lstm_forecaster(X_train.shape[2], y_train.shape[1], hidden_size, num_layers).to(resolved_device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = nn.MSELoss()
-    loader = DataLoader(TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train_fit)), batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val_fit)), batch_size=batch_size, shuffle=False)
+    model = build_lstm_forecaster(
+        X_train.shape[2],
+        y_train.shape[1],
+        hidden_size,
+        num_layers,
+        dropout=dropout,
+    ).to(resolved_device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="min", factor=0.5, patience=max(2, patience // 2)
+    )
+    criterion = nn.SmoothL1Loss(beta=0.01)
+    loader = DataLoader(
+        TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train_fit.astype("float32"))),
+        batch_size=min(batch_size, max(1, len(X_train))),
+        shuffle=True,
+    )
+    val_loader = DataLoader(
+        TensorDataset(torch.from_numpy(X_val), torch.from_numpy(y_val_fit.astype("float32"))),
+        batch_size=min(batch_size, max(1, len(X_val))),
+        shuffle=False,
+    )
 
     best_loss = math.inf
     best_epoch = 0
@@ -514,6 +619,8 @@ def train_lstm_forecast(
             optimizer.zero_grad(set_to_none=True)
             loss = criterion(model(batch_x), batch_y)
             loss.backward()
+            if grad_clip_norm > 0:
+                nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
             optimizer.step()
             losses.append(float(loss.detach().cpu().item()))
         model.eval()
@@ -525,8 +632,16 @@ def train_lstm_forecast(
                 val_losses.append(float(criterion(model(val_x), val_y).detach().cpu().item()))
             val_loss = float(sum(val_losses) / max(1, len(val_losses)))
         train_loss = float(sum(losses) / max(1, len(losses)))
-        history.append({"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss})
-        if val_loss < best_loss:
+        scheduler.step(val_loss)
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "learning_rate": float(optimizer.param_groups[0]["lr"]),
+            }
+        )
+        if val_loss < best_loss - 1e-8:
             best_loss = val_loss
             best_epoch = epoch
             best_state = copy.deepcopy(model.state_dict())
@@ -547,13 +662,22 @@ def train_lstm_forecast(
         "created_at": created_at,
         "horizon_steps": int(data["horizon_steps"][0]) if "horizon_steps" in data else None,
         "resample_interval_sec": int(data["resample_interval_sec"][0]) if "resample_interval_sec" in data else 60,
+        "cadence_seconds": float(data["cadence_seconds"][0]) if "cadence_seconds" in data else float(data["resample_interval_sec"][0]),
+        "horizon_duration_seconds": float(data["horizon_duration_seconds"][0]) if "horizon_duration_seconds" in data else None,
         "window_size": int(data["window_size"][0]) if "window_size" in data else int(X_train.shape[1]),
         "feature_names": list(feature_names),
+        "feature_schema_sha256": str(data["feature_schema_sha256"][0]) if "feature_schema_sha256" in data else None,
+        "feature_manifest": _loads_json_array_value(data.get("feature_manifest_json"), {}),
+        "data_quality": _loads_json_array_value(data.get("data_quality_json"), {}),
         "target_names": list(target_names),
         "target_indices": [int(index) for index in target_indices],
         "normalization_ranges": {key: list(value) for key, value in normalization_ranges.items()},
         "dataset_meta": dataset_meta,
         "metrics_ref": str(out_dir / "metrics.json"),
+        "dropout": dropout,
+        "weight_decay": weight_decay,
+        "grad_clip_norm": grad_clip_norm,
+        "status": "EXPERIMENTAL",
     }
     torch.save(
         {
@@ -607,6 +731,7 @@ def _load_model(model_path: str | Path, device: str = "auto"):
         int(checkpoint["output_size"]),
         int(checkpoint["hidden_size"]),
         int(checkpoint["num_layers"]),
+        dropout=float(checkpoint.get("dropout", 0.0)),
     ).to(resolved_device)
     model.load_state_dict(checkpoint["state_dict"], strict=True)
     model.eval()
@@ -692,19 +817,29 @@ def evaluate_lstm_forecast(
     device: str = "auto",
     normalization_ranges: dict[str, tuple[float, float]] | None = None,
     eval_batch_size: int = 1024,
+    seasonal_period: int = 0,
 ) -> dict[str, Any]:
     np = _require_numpy()
     torch, _nn, _loader, _dataset = _require_torch()
     data = np.load(dataset_npz, allow_pickle=False)
     model, checkpoint, resolved_device = _load_model(model_path, device)
     target_names = tuple(str(item) for item in data["target_names"])
+    feature_names = tuple(str(item) for item in data["feature_names"])
     target_indices = data["target_indices"].astype("int64")
+    if tuple(checkpoint.get("feature_names", ())) != feature_names:
+        raise ValueError("LSTM checkpoint feature schema does not match dataset")
+    if tuple(checkpoint.get("target_names", ())) != target_names:
+        raise ValueError("LSTM checkpoint target schema does not match dataset")
     forecast_strategy = str(checkpoint.get("forecast_strategy", "absolute"))
     dataset_meta = _load_dataset_metadata(data)
+    data_quality = _loads_json_array_value(data.get("data_quality_json"), {}) or dataset_meta.get("data_quality", {})
+    feature_manifest = _loads_json_array_value(data.get("feature_manifest_json"), {}) or dataset_meta.get("feature_manifest", {})
+    cadence_diagnostics = _loads_json_array_value(data.get("cadence_diagnostics_json"), {}) or dataset_meta.get("cadence_diagnostics", {})
     stored_ranges = _load_normalization_ranges(data)
     ranges = _merged_ranges(normalization_ranges or stored_ranges)
-    horizon_steps = int(data["horizon_steps"][0]) if "horizon_steps" in data else None
-    resample_interval_sec = int(data["resample_interval_sec"][0]) if "resample_interval_sec" in data else 60
+    horizon_steps = int(data["horizon_steps"][0]) if "horizon_steps" in data else 1
+    cadence_seconds = float(data["cadence_seconds"][0]) if "cadence_seconds" in data else float(data["resample_interval_sec"][0])
+    horizon_duration_seconds = float(data["horizon_duration_seconds"][0]) if "horizon_duration_seconds" in data else horizon_steps * cadence_seconds
     result: dict[str, Any] = {
         "model_path": str(model_path),
         "dataset_npz": str(dataset_npz),
@@ -713,14 +848,19 @@ def evaluate_lstm_forecast(
         "forecast_strategy": forecast_strategy,
         "created_at": _utc_now(),
         "target_names": list(target_names),
-        "feature_names": list(str(item) for item in data["feature_names"]),
+        "feature_names": list(feature_names),
+        "feature_manifest": feature_manifest,
+        "data_quality": data_quality,
+        "cadence_diagnostics": cadence_diagnostics,
         "horizon_steps": horizon_steps,
-        "horizon_minutes_assuming_60s_resample": horizon_steps,
-        "forecast_horizon_minutes": (horizon_steps or 0) * resample_interval_sec / 60,
-        "resample_interval_sec": resample_interval_sec,
+        "horizon_duration_seconds": horizon_duration_seconds,
+        "forecast_horizon_minutes": horizon_duration_seconds / 60.0,
+        "resample_interval_sec": int(round(cadence_seconds)),
         "window_size": int(data["window_size"][0]) if "window_size" in data else None,
         "normalization_ranges": {key: list(value) for key, value in ranges.items()},
         "dataset_meta": dataset_meta,
+        "seasonal_period": seasonal_period,
+        "baseline_selection_split": "val",
         "splits": {},
     }
     if eval_batch_size < 1:
@@ -732,36 +872,84 @@ def evaluate_lstm_forecast(
             for start in range(0, x.shape[0], eval_batch_size):
                 batch = torch.from_numpy(x[start:start + eval_batch_size]).to(resolved_device)
                 preds.append(model(batch).detach().cpu().numpy())
-        return np.concatenate(preds, axis=0) if preds else np.empty((0, len(target_names)), dtype=np.float32)
+        output = np.concatenate(preds, axis=0) if preds else np.empty((0, len(target_names)), dtype=np.float32)
+        if output.shape[0] != x.shape[0]:
+            raise RuntimeError("LSTM evaluator dropped or duplicated samples")
+        return output
 
+    split_candidates: dict[str, dict[str, dict[str, Any]]] = {}
+    split_actual: dict[str, Any] = {}
     result["eval_batch_size"] = eval_batch_size
     for split in ("train", "val", "test"):
         x = data[f"X_{split}"].astype("float32")
         y = data[f"y_{split}"].astype("float32")
-        baseline = x[:, -1, target_indices]
+        candidates = baseline_candidates(
+            x,
+            target_indices,
+            horizon_steps=horizon_steps,
+            seasonal_period=seasonal_period,
+        )
+        split_candidates[split] = candidates
+        split_actual[split] = y
         raw_pred = predict_batches(x)
         pred = _apply_forecast_strategy(raw_pred, x, target_indices, forecast_strategy)
         lstm_metrics = _regression_metrics(y, pred, target_names)
-        baseline_metrics = _regression_metrics(y, baseline, target_names)
         y_denorm = _denormalize_matrix(y, target_names, ranges)
         pred_denorm = _denormalize_matrix(pred, target_names, ranges)
-        baseline_denorm = _denormalize_matrix(baseline, target_names, ranges)
         lstm_metrics["denormalized"] = _regression_metrics(y_denorm, pred_denorm, target_names)
-        baseline_metrics["denormalized"] = _regression_metrics(y_denorm, baseline_denorm, target_names)
+        baseline_metrics: dict[str, Any] = {}
+        for name, item in candidates.items():
+            if not item["applicable"] or item["predictions"] is None:
+                baseline_metrics[name] = {"applicable": False, "reason": item["reason"]}
+                continue
+            metrics = _regression_metrics(y, item["predictions"], target_names)
+            metrics["denormalized"] = _regression_metrics(
+                y_denorm,
+                _denormalize_matrix(item["predictions"], target_names, ranges),
+                target_names,
+            )
+            baseline_metrics[name] = {"applicable": True, "reason": None, **metrics}
+        last_value_metrics = baseline_metrics["last_value"]
         result["splits"][split] = {
             "samples": int(x.shape[0]),
             "lstm": lstm_metrics,
-            "last_value_baseline": baseline_metrics,
-            "baseline_delta": _metric_deltas(lstm_metrics, baseline_metrics),
-            "denormalized_baseline_delta": _metric_deltas(
-                lstm_metrics["denormalized"], baseline_metrics["denormalized"]
-            ),
+            "last_value_baseline": {
+                key: value for key, value in last_value_metrics.items() if key not in {"applicable", "reason"}
+            },
+            "baselines": baseline_metrics,
         }
+
+    selection = select_baseline_per_target(
+        split_actual["val"], split_candidates["val"], target_names
+    )
+    result["baseline_selection"] = selection
+    for split in ("train", "val", "test"):
+        selected = compose_selected_baseline(split_candidates[split], selection, target_names)
+        baseline_metrics = _regression_metrics(split_actual[split], selected, target_names)
+        baseline_metrics["denormalized"] = _regression_metrics(
+            _denormalize_matrix(split_actual[split], target_names, ranges),
+            _denormalize_matrix(selected, target_names, ranges),
+            target_names,
+        )
+        lstm_metrics = result["splits"][split]["lstm"]
+        result["splits"][split]["validation_selected_baseline"] = baseline_metrics
+        result["splits"][split]["baseline_delta"] = _metric_deltas(lstm_metrics, baseline_metrics)
+        result["splits"][split]["denormalized_baseline_delta"] = _metric_deltas(
+            lstm_metrics["denormalized"], baseline_metrics["denormalized"]
+        )
+
     result["nan_count"] = int(sum(np.isnan(data[name]).sum() for name in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test")))
     result["inf_count"] = int(sum(np.isinf(data[name]).sum() for name in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test")))
     result["data_status"] = "PASS" if result["nan_count"] == 0 and result["inf_count"] == 0 else "FAIL"
     result["baseline_comparison_status"] = _baseline_status(result["splits"]["test"])
-    result["model_readiness"] = _model_readiness(result["data_status"], result["baseline_comparison_status"])
+    quality_passed = bool(data_quality.get("status") == "PASS")
+    if result["data_status"] != "PASS":
+        result["model_readiness"] = "NOT_READY"
+    elif quality_passed and result["baseline_comparison_status"] == "BEATS_BASELINE":
+        result["model_readiness"] = "PROMISING"
+    else:
+        result["model_readiness"] = "EXPERIMENTAL"
+    result["quality_gate_passed"] = quality_passed
     result["status"] = result["data_status"]
     output_path = Path(model_path).parent if output_dir is None else Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -811,15 +999,31 @@ def predict_lstm_forecast(
     count = 0
     with output_path.open("w", encoding="utf-8") as out:
         for record in _read_window_records(windows_jsonl):
-            if tuple(record["feature_names"]) != feature_names:
-                raise ValueError("window feature_names do not match trained model")
-            x = np.asarray([record["x"]], dtype=np.float32)
+            source_feature_names = tuple(record["feature_names"])
+            missing_features = [name for name in feature_names if name not in source_feature_names]
+            if missing_features:
+                raise ValueError(
+                    f"window feature schema is missing trained features: {missing_features}"
+                )
+            selected_indices = [source_feature_names.index(name) for name in feature_names]
+            selected_x = [
+                [row[index] for index in selected_indices]
+                for row in record["x"]
+            ]
+            x = np.asarray([selected_x], dtype=np.float32)
+            if x.shape[2] != int(checkpoint["input_size"]):
+                raise ValueError("selected window feature count does not match checkpoint input_size")
             with torch.no_grad():
                 raw_pred = model(torch.from_numpy(x).to(resolved_device)).detach().cpu().numpy()
                 pred = _apply_forecast_strategy(raw_pred, x, target_indices, forecast_strategy)[0]
             prediction_normalized = [float(value) for value in pred]
             horizon_steps = checkpoint.get("horizon_steps")
-            resample_interval_sec = checkpoint.get("resample_interval_sec", 60)
+            cadence_seconds = float(
+                checkpoint.get("cadence_seconds", checkpoint.get("resample_interval_sec", 60))
+            )
+            horizon_duration_seconds = checkpoint.get("horizon_duration_seconds")
+            if horizon_duration_seconds is None:
+                horizon_duration_seconds = (horizon_steps or 0) * cadence_seconds
             out.write(json.dumps({
                 "gateway_id": record["gateway_id"],
                 "node_id": record["node_id"],
@@ -832,7 +1036,9 @@ def predict_lstm_forecast(
                 "model_version": checkpoint.get("model_version", MODEL_VERSION),
                 "forecast_strategy": forecast_strategy,
                 "forecast_horizon_steps": horizon_steps,
-                "forecast_horizon_minutes": (horizon_steps or 0) * resample_interval_sec / 60,
+                "forecast_horizon_seconds": horizon_duration_seconds,
+                "forecast_horizon_minutes": float(horizon_duration_seconds) / 60.0,
+                "feature_schema_sha256": checkpoint.get("feature_schema_sha256"),
                 "metrics_ref": checkpoint.get("metrics_ref"),
             }, separators=(",", ":")) + "\n")
             count += 1
@@ -1039,7 +1245,8 @@ def _experiment_row(run_id: str, stats: ForecastDatasetStats, training: dict[str
     row = {
         "run_id": run_id,
         "horizon_steps": stats.horizon_steps,
-        "forecast_horizon_minutes": stats.horizon_steps * stats.resample_interval_sec / 60,
+        "forecast_horizon_minutes": stats.horizon_duration_seconds / 60.0,
+        "cadence_seconds": stats.cadence_seconds,
         "window_size": stats.window_size,
         "hidden_size": hidden_size,
         "forecast_strategy": training.get("forecast_strategy", "absolute"),
@@ -1050,8 +1257,8 @@ def _experiment_row(run_id: str, stats: ForecastDatasetStats, training: dict[str
         "test_samples": test["samples"],
         "test_lstm_mae": test["lstm"]["overall_mae"],
         "test_lstm_rmse": test["lstm"]["overall_rmse"],
-        "test_baseline_mae": test["last_value_baseline"]["overall_mae"],
-        "test_baseline_rmse": test["last_value_baseline"]["overall_rmse"],
+        "test_baseline_mae": test["validation_selected_baseline"]["overall_mae"],
+        "test_baseline_rmse": test["validation_selected_baseline"]["overall_rmse"],
         "test_rmse_skill_score": test["baseline_delta"]["overall_rmse_skill_score"],
         "input_shape": list(stats.input_shape),
         "target_shape": list(stats.target_shape),
@@ -1059,10 +1266,10 @@ def _experiment_row(run_id: str, stats: ForecastDatasetStats, training: dict[str
     }
     for target in stats.target_names:
         row[f"{target}_rmse"] = test["lstm"]["per_target"][target]["rmse"]
-        row[f"{target}_baseline_rmse"] = test["last_value_baseline"]["per_target"][target]["rmse"]
+        row[f"{target}_baseline_rmse"] = test["validation_selected_baseline"]["per_target"][target]["rmse"]
         row[f"{target}_skill_score"] = test["baseline_delta"]["per_target"][target]["rmse_skill_score"]
         row[f"{target}_denorm_rmse"] = test["lstm"]["denormalized"]["per_target"][target]["rmse"]
-        row[f"{target}_baseline_denorm_rmse"] = test["last_value_baseline"]["denormalized"]["per_target"][target]["rmse"]
+        row[f"{target}_baseline_denorm_rmse"] = test["validation_selected_baseline"]["denormalized"]["per_target"][target]["rmse"]
     return row
 
 
@@ -1079,7 +1286,7 @@ def run_forecast_experiments(
     seed: int = 42,
     device: str = "auto",
     window_sizes: tuple[int, ...] = (12,),
-    resample_interval_sec: int = 60,
+    resample_interval_sec: int | None = None,
     normalization_ranges: dict[str, tuple[float, float]] | None = None,
     model_version: str = MODEL_VERSION,
     eval_batch_size: int = 1024,

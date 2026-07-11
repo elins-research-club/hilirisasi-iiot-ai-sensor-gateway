@@ -273,6 +273,12 @@ class EdgeForecastTests(unittest.TestCase):
                     dataset, training["model_path"], output_dir, seasonal_period=2, device="cpu"
                 )
                 self.assertIn(metrics["model_readiness"], {"PROMISING", "EXPERIMENTAL"})
+                self.assertIn(
+                    metrics["baseline_comparison_status"],
+                    {"BEATS_BASELINE", "UNDER_BASELINE", "MIXED"},
+                )
+                self.assertIn(metrics["data_status"], {"PASS", "WARN", "FAIL", "UNKNOWN"})
+                self.assertIn(metrics["status"], {"PASS", "FAIL_OR_EXPERIMENTAL"})
                 self.assertIn("last_value", metrics["splits"]["test"]["baselines"])
                 self.assertIn("seasonal_naive", metrics["splits"]["test"]["baselines"])
                 predictions = predict_edge_forecast(
