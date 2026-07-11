@@ -17,7 +17,7 @@ constexpr const char* TAG = "iiot_sensor_node";
 
 extern "C" void app_main() {
   iiot::SensorReader sensors;
-  iiot::Preprocessor preprocessor;
+  iiot::HardwareIntegrityGate hardware_gate;
   iiot::LoraE32Link link;
 
   const bool sensors_initialized = sensors.begin();
@@ -38,11 +38,11 @@ extern "C" void app_main() {
       link_ready = link.begin();
     }
     const iiot::SensorSample raw = sensors.read();
-    const iiot::PreprocessedSample processed = preprocessor.process(raw);
+    const iiot::HardwareObservation observation = hardware_gate.process(raw);
     char payload[1024] = {0};
     const uint64_t uptime_seconds = static_cast<uint64_t>(esp_timer_get_time() / 1000000ULL);
     const size_t payload_size =
-        iiot::buildPayload(payload, sizeof(payload), processed, sequence, uptime_seconds, boot_id);
+        iiot::buildPayload(payload, sizeof(payload), observation, sequence, uptime_seconds, boot_id);
     if (payload_size == 0) {
       ESP_LOGE(TAG, "payload encoding failed; event not transmitted");
     } else if (!link_ready) {
@@ -53,9 +53,9 @@ extern "C" void app_main() {
                static_cast<unsigned long>(sequence));
       link_ready = false;
     } else {
-      ESP_LOGI(TAG, "sent compact-v2 seq=%lu bytes=%u quality=%s",
+      ESP_LOGI(TAG, "sent compact-v3 seq=%lu bytes=%u hardware_summary=%s",
                static_cast<unsigned long>(sequence), static_cast<unsigned>(payload_size),
-               processed.quality);
+               observation.hardware_summary);
     }
     ++sequence;
     vTaskDelay(pdMS_TO_TICKS(iiot::SAMPLE_INTERVAL_MS));

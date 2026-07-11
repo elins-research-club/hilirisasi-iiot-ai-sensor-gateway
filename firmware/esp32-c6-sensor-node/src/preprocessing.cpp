@@ -25,109 +25,95 @@ void appendFlag(char* target, size_t size, const char* flag) {
   }
 }
 
-float updateOrNan(MovingAverage& average, float value) {
-  return isfinite(value) ? average.update(value) : NAN;
-}
-
 }  // namespace
 
-float MovingAverage::update(float value) {
-  if (!isfinite(value)) {
-    return NAN;
-  }
-  values_[index_] = value;
-  index_ = (index_ + 1U) % kCapacity;
-  if (count_ < kCapacity) {
-    ++count_;
-  }
-  float sum = 0.0F;
-  for (size_t i = 0; i < count_; ++i) {
-    sum += values_[i];
-  }
-  return count_ ? sum / static_cast<float>(count_) : NAN;
-}
-
-PreprocessedSample Preprocessor::process(const SensorSample& input) {
-  PreprocessedSample output{};
+HardwareObservation HardwareIntegrityGate::process(const SensorSample& input) const {
+  HardwareObservation output{};
+  output.mhz19_warming = input.mhz19_warming;
+  output.pms7003t_warming = input.pms7003t_warming;
   output.health = input.health;
 
   const bool bme_values_ok =
-      inRange(input.temperature_c, -10.0F, 80.0F) &&
+      inRange(input.temperature_c, -40.0F, 85.0F) &&
       inRange(input.humidity_pct, 0.0F, 100.0F) &&
-      inRange(input.pressure_hpa, 800.0F, 1200.0F) &&
-      inRange(input.bme_gas_ohm, 100.0F, 10000000.0F);
+      inRange(input.pressure_hpa, 300.0F, 1250.0F) &&
+      inRange(input.bme_gas_ohm, 1.0F, 1000000000.0F);
   output.health.bme688_ok = input.health.bme688_ok && bme_values_ok;
   if (output.health.bme688_ok) {
-    output.temperature_c = temperature_.update(input.temperature_c);
-    output.humidity_pct = humidity_.update(input.humidity_pct);
-    output.pressure_hpa = pressure_.update(input.pressure_hpa);
-    output.bme_gas_ohm = bme_gas_.update(input.bme_gas_ohm);
+    output.temperature_c = input.temperature_c;
+    output.humidity_pct = input.humidity_pct;
+    output.pressure_hpa = input.pressure_hpa;
+    output.bme_gas_ohm = input.bme_gas_ohm;
   } else {
-    appendFlag(output.flags, sizeof(output.flags), "bme688_invalid");
+    appendFlag(output.flags, sizeof(output.flags), "bme688_hardware_invalid");
   }
 
-  output.health.sen0466_ok = input.health.sen0466_ok && inRange(input.co_ppm, 0.0F, 1000.0F);
+  output.health.sen0466_ok =
+      input.health.sen0466_ok && inRange(input.co_ppm, 0.0F, 10000.0F);
   if (output.health.sen0466_ok) {
-    output.co_ppm = co_.update(input.co_ppm);
+    output.co_ppm = input.co_ppm;
   } else {
-    appendFlag(output.flags, sizeof(output.flags), "co_invalid");
+    appendFlag(output.flags, sizeof(output.flags), "sen0466_hardware_invalid");
   }
 
   const bool no2_mv_ok = inRange(input.no2_raw_mv, 0.0F, 3300.0F);
-  const bool no2_ratio_ok = !isfinite(input.no2_ratio) || inRange(input.no2_ratio, 0.0F, 20.0F);
+  const bool no2_ratio_ok =
+      !isfinite(input.no2_ratio) || inRange(input.no2_ratio, 0.0F, 100.0F);
   output.health.sen0574_ok = input.health.sen0574_ok && no2_mv_ok && no2_ratio_ok;
   if (output.health.sen0574_ok) {
-    output.no2_raw_mv = no2_mv_.update(input.no2_raw_mv);
-    output.no2_ratio = updateOrNan(no2_ratio_, input.no2_ratio);
+    output.no2_raw_mv = input.no2_raw_mv;
+    output.no2_ratio = input.no2_ratio;
     if (!isfinite(input.no2_ratio)) {
       appendFlag(output.flags, sizeof(output.flags), "no2_ratio_unavailable");
     }
   } else {
-    appendFlag(output.flags, sizeof(output.flags), "no2_invalid");
+    appendFlag(output.flags, sizeof(output.flags), "sen0574_hardware_invalid");
   }
 
-  output.health.sen0321_ok = input.health.sen0321_ok && inRange(input.o3_ppm, 0.0F, 10.0F);
+  output.health.sen0321_ok =
+      input.health.sen0321_ok && inRange(input.o3_ppm, 0.0F, 100.0F);
   if (output.health.sen0321_ok) {
-    output.o3_ppm = o3_.update(input.o3_ppm);
+    output.o3_ppm = input.o3_ppm;
   } else {
-    appendFlag(output.flags, sizeof(output.flags), "o3_invalid");
+    appendFlag(output.flags, sizeof(output.flags), "sen0321_hardware_invalid");
   }
 
-  output.health.mhz19_ok = input.health.mhz19_ok && inRange(input.co2_ppm, 0.0F, 10000.0F);
+  output.health.mhz19_ok =
+      input.health.mhz19_ok && inRange(input.co2_ppm, 0.0F, 50000.0F);
   if (output.health.mhz19_ok) {
-    output.co2_ppm = co2_.update(input.co2_ppm);
+    output.co2_ppm = input.co2_ppm;
   } else if (input.mhz19_warming) {
     appendFlag(output.flags, sizeof(output.flags), "co2_warmup");
   } else {
-    appendFlag(output.flags, sizeof(output.flags), "co2_invalid");
+    appendFlag(output.flags, sizeof(output.flags), "mhz19_hardware_invalid");
   }
 
   const bool pm_values_ok =
-      inRange(input.pm1_ug_m3, 0.0F, 5000.0F) &&
-      inRange(input.pm25_ug_m3, 0.0F, 5000.0F) &&
-      inRange(input.pm10_ug_m3, 0.0F, 5000.0F);
+      inRange(input.pm1_ug_m3, 0.0F, 10000.0F) &&
+      inRange(input.pm25_ug_m3, 0.0F, 10000.0F) &&
+      inRange(input.pm10_ug_m3, 0.0F, 10000.0F);
   output.health.pms7003t_ok = input.health.pms7003t_ok && pm_values_ok;
   if (output.health.pms7003t_ok) {
-    output.pm1_ug_m3 = pm1_.update(input.pm1_ug_m3);
-    output.pm25_ug_m3 = pm25_.update(input.pm25_ug_m3);
-    output.pm10_ug_m3 = pm10_.update(input.pm10_ug_m3);
+    output.pm1_ug_m3 = input.pm1_ug_m3;
+    output.pm25_ug_m3 = input.pm25_ug_m3;
+    output.pm10_ug_m3 = input.pm10_ug_m3;
   } else if (input.pms7003t_warming) {
     appendFlag(output.flags, sizeof(output.flags), "pm_warmup");
   } else {
-    appendFlag(output.flags, sizeof(output.flags), "pm_invalid");
+    appendFlag(output.flags, sizeof(output.flags), "pms7003t_hardware_invalid");
   }
 
   const bool power_values_ok =
-      inRange(input.battery_voltage, 0.0F, 60.0F) &&
-      inRange(input.current_ma, -20000.0F, 20000.0F) &&
-      inRange(input.power_mw, -1000000.0F, 1000000.0F);
+      inRange(input.battery_voltage, 0.0F, 100.0F) &&
+      inRange(input.current_ma, -100000.0F, 100000.0F) &&
+      inRange(input.power_mw, -10000000.0F, 10000000.0F);
   output.health.ina226_ok = input.health.ina226_ok && power_values_ok;
   if (output.health.ina226_ok) {
-    output.battery_voltage = battery_voltage_.update(input.battery_voltage);
-    output.current_ma = current_.update(input.current_ma);
-    output.power_mw = power_.update(input.power_mw);
+    output.battery_voltage = input.battery_voltage;
+    output.current_ma = input.current_ma;
+    output.power_mw = input.power_mw;
   } else {
-    appendFlag(output.flags, sizeof(output.flags), "power_invalid");
+    appendFlag(output.flags, sizeof(output.flags), "ina226_hardware_invalid");
   }
 
   const bool states[] = {
@@ -143,16 +129,18 @@ PreprocessedSample Preprocessor::process(const SensorSample& input) {
   for (bool state : states) {
     valid_groups += state ? 1 : 0;
   }
+  const int warming_groups =
+      (input.mhz19_warming && !output.health.mhz19_ok ? 1 : 0) +
+      (input.pms7003t_warming && !output.health.pms7003t_ok ? 1 : 0);
   if (valid_groups == 7) {
-    output.status = "ok";
-    output.quality = "valid";
-  } else if (valid_groups > 0) {
-    output.status = "degraded";
-    output.quality = "partial";
+    output.hardware_summary = "ok";
+  } else if (warming_groups > 0 && valid_groups + warming_groups == 7) {
+    output.hardware_summary = "warming";
+  } else if (valid_groups > 0 || warming_groups > 0) {
+    output.hardware_summary = "partial";
   } else {
-    output.status = "sensor_error";
-    output.quality = "invalid";
-    appendFlag(output.flags, sizeof(output.flags), "sensor_error");
+    output.hardware_summary = "error";
+    appendFlag(output.flags, sizeof(output.flags), "sensor_hardware_error");
   }
   return output;
 }

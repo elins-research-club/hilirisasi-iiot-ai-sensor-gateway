@@ -36,7 +36,12 @@ struct SensorSample {
   SensorHealth health{};
 };
 
-struct PreprocessedSample {
+// Hardware-proximate observation for compact_sensor.v3. Values are direct
+// engineering observations after protocol/checksum/warm-up/vendor compensation
+// and broad physical-impossibility gates. No semantic smoothing is allowed here.
+struct HardwareObservation {
+  bool mhz19_warming = false;
+  bool pms7003t_warming = false;
   float temperature_c = NAN;
   float humidity_pct = NAN;
   float pressure_hpa = NAN;
@@ -53,8 +58,7 @@ struct PreprocessedSample {
   float current_ma = NAN;
   float power_mw = NAN;
   SensorHealth health{};
-  const char* status = "sensor_error";
-  const char* quality = "invalid";
+  const char* hardware_summary = "error";
   char flags[256] = {0};
 };
 

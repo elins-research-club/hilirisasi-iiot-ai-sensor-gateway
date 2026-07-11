@@ -2,7 +2,6 @@
 
 #include <math.h>
 #include <stdio.h>
-#include <string.h>
 
 #include "config.h"
 
@@ -20,11 +19,16 @@ void formatNumber(char* output, size_t output_size, float value, int precision) 
   snprintf(output, output_size, "%.*f", precision, static_cast<double>(value));
 }
 
-const char* booleanJson(bool value) { return value ? "true" : "false"; }
+const char* hardwareState(bool ok, bool warming = false) {
+  if (ok) {
+    return "ok";
+  }
+  return warming ? "warming" : "error";
+}
 
 }  // namespace
 
-size_t buildPayload(char* output, size_t output_size, const PreprocessedSample& sample,
+size_t buildPayload(char* output, size_t output_size, const HardwareObservation& sample,
                     uint32_t sequence, uint64_t uptime_seconds, const char* boot_id) {
   if (output == nullptr || output_size == 0 || boot_id == nullptr || boot_id[0] == '\0') {
     return 0;
@@ -49,20 +53,25 @@ size_t buildPayload(char* output, size_t output_size, const PreprocessedSample& 
 
   const int written = snprintf(
       output, output_size,
-      "{\"v\":2,\"gw\":\"%s\",\"n\":\"%s\",\"r\":\"%s\",\"ts\":%llu,"
-      "\"seq\":%lu,\"bid\":\"%s\",\"st\":\"%s\",\"q\":\"%s\",\"f\":\"%s\","
-      "\"ok\":{\"bme688\":%s,\"sen0466\":%s,\"sen0574\":%s,\"sen0321\":%s,"
-      "\"mhz19\":%s,\"pms7003t\":%s,\"ina226\":%s},"
+      "{\"v\":3,\"gw\":\"%s\",\"n\":\"%s\",\"r\":\"%s\",\"ts\":%llu,"
+      "\"tb\":\"%s\",\"seq\":%lu,\"bid\":\"%s\",\"pp\":\"%s\","
+      "\"fw\":\"%s\",\"cfg\":\"%s\",\"cal\":\"%s\",\"hs\":\"%s\","
+      "\"f\":\"%s\",\"ok\":{\"bme688\":\"%s\",\"sen0466\":\"%s\","
+      "\"sen0574\":\"%s\",\"sen0321\":\"%s\",\"mhz19\":\"%s\","
+      "\"pms7003t\":\"%s\",\"ina226\":\"%s\"},"
       "\"s\":{\"tc\":%s,\"h\":%s,\"p\":%s,\"bme\":%s,\"co\":%s,"
       "\"n2mv\":%s,\"n2r\":%s,\"o3\":%s,\"co2\":%s,\"pm1\":%s,"
       "\"pm25\":%s,\"pm10\":%s,\"bv\":%s,\"bi\":%s,\"bp\":%s}}",
       GATEWAY_ID, NODE_ID, ROOM_ID, static_cast<unsigned long long>(uptime_seconds),
-      static_cast<unsigned long>(sequence), boot_id, sample.status, sample.quality, sample.flags,
-      booleanJson(sample.health.bme688_ok), booleanJson(sample.health.sen0466_ok),
-      booleanJson(sample.health.sen0574_ok), booleanJson(sample.health.sen0321_ok),
-      booleanJson(sample.health.mhz19_ok), booleanJson(sample.health.pms7003t_ok),
-      booleanJson(sample.health.ina226_ok), tc, h, p, bme, co, n2mv, n2r, o3, co2, pm1, pm25,
-      pm10, bv, bi, bp);
+      TIME_BASIS, static_cast<unsigned long>(sequence), boot_id, PROCESSING_PROFILE,
+      FIRMWARE_VERSION, HARDWARE_CONFIG_VERSION, CALIBRATION_VERSION,
+      sample.hardware_summary, sample.flags,
+      hardwareState(sample.health.bme688_ok), hardwareState(sample.health.sen0466_ok),
+      hardwareState(sample.health.sen0574_ok), hardwareState(sample.health.sen0321_ok),
+      hardwareState(sample.health.mhz19_ok, sample.mhz19_warming),
+      hardwareState(sample.health.pms7003t_ok, sample.pms7003t_warming),
+      hardwareState(sample.health.ina226_ok), tc, h, p, bme, co, n2mv, n2r, o3, co2,
+      pm1, pm25, pm10, bv, bi, bp);
   if (written < 0 || static_cast<size_t>(written) >= output_size) {
     output[0] = '\0';
     return 0;

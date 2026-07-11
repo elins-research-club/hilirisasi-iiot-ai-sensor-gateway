@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://greyghst.local/schemas/compact_sensor.v3.schema.json",
+  "title": "Compact sensor hardware observation v3",
+  "description": "Hardware-proximate observation emitted before gateway semantic preprocessing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "n", "r", "ts", "tb", "seq", "bid", "pp", "fw", "cfg", "cal", "hs", "f", "ok", "s"],
+  "properties": {
+    "v": {"const": 3},
+    "gw": {"type": "string", "minLength": 1},
+    "n": {"type": "string", "minLength": 1},
+    "r": {"type": "string", "minLength": 1},
+    "ts": {
+      "description": "Timestamp in the basis declared by tb. uptime_s is expected for the initial ESP32-C6 firmware.",
+      "oneOf": [
+        {"type": "number", "minimum": 0},
+        {"type": "string", "minLength": 1}
+      ]
+    },
+    "tb": {"type": "string", "enum": ["uptime_s", "epoch_s", "epoch_ms", "rfc3339"]},
+    "seq": {"type": "integer", "minimum": 0},
+    "bid": {"type": "string", "minLength": 1, "maxLength": 64},
+    "pp": {"const": "hardware_only"},
+    "fw": {"type": "string", "minLength": 1, "maxLength": 64},
+    "cfg": {"type": "string", "minLength": 1, "maxLength": 64},
+    "cal": {"type": "string", "minLength": 1, "maxLength": 64},
+    "hs": {"type": "string", "enum": ["ok", "partial", "warming", "error"]},
+    "f": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      ]
+    },
+    "ok": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bme688", "sen0466", "sen0574", "sen0321", "mhz19", "pms7003t", "ina226"],
+      "properties": {
+        "bme688": {"$ref": "#/$defs/hardwareState"},
+        "sen0466": {"$ref": "#/$defs/hardwareState"},
+        "sen0574": {"$ref": "#/$defs/hardwareState"},
+        "sen0321": {"$ref": "#/$defs/hardwareState"},
+        "mhz19": {"$ref": "#/$defs/hardwareState"},
+        "pms7003t": {"$ref": "#/$defs/hardwareState"},
+        "ina226": {"$ref": "#/$defs/hardwareState"}
+      }
+    },
+    "radio": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "rssi": {"type": ["number", "null"]},
+        "snr": {"type": ["number", "null"]}
+      }
+    },
+    "s": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "tc": {"type": ["number", "null"]},
+        "h": {"type": ["number", "null"]},
+        "p": {"type": ["number", "null"]},
+        "bme": {"type": ["number", "null"]},
+        "co": {"type": ["number", "null"]},
+        "n2mv": {"type": ["number", "null"]},
+        "n2r": {"type": ["number", "null"]},
+        "o3": {"type": ["number", "null"]},
+        "co2": {"type": ["number", "null"]},
+        "pm1": {"type": ["number", "null"]},
+        "pm25": {"type": ["number", "null"]},
+        "pm10": {"type": ["number", "null"]},
+        "bv": {"type": ["number", "null"]},
+        "bi": {"type": ["number", "null"]},
+        "bp": {"type": ["number", "null"]}
+      }
+    }
+  },
+  "$defs": {
+    "hardwareState": {
+      "type": "string",
+      "enum": ["ok", "warming", "timeout", "checksum_error", "protocol_error", "range_error", "missing", "disabled", "error"]
+    }
+  }
+}

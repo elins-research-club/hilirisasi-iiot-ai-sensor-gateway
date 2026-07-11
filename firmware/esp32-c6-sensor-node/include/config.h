@@ -15,6 +15,11 @@ namespace iiot {
 constexpr const char* NODE_ID = "esp32c6_node_01";
 constexpr const char* ROOM_ID = "room_A";
 constexpr const char* GATEWAY_ID = "raspi_gateway_01";
+constexpr const char* FIRMWARE_VERSION = "sensor-fw-3.0.0-dev";
+constexpr const char* HARDWARE_CONFIG_VERSION = "esp32c6-board-profile-unverified";
+constexpr const char* CALIBRATION_VERSION = "factory-or-placeholder-unverified";
+constexpr const char* PROCESSING_PROFILE = "hardware_only";
+constexpr const char* TIME_BASIS = "uptime_s";
 constexpr uint32_t SAMPLE_INTERVAL_MS = 60000;
 
 // Shared I2C bus. All addresses below are 7-bit addresses.
