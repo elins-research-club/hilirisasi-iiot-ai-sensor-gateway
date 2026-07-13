@@ -289,5 +289,22 @@ class ForecastingTests(unittest.TestCase):
             self.assertTrue((output_dir / 'runs' / 'w4_h2_hidden8' / 'metrics.json').exists())
 
 
+
+class BaselineStatusMajorityTests(unittest.TestCase):
+    def test_majority_win_with_one_loss_is_beats_baseline(self):
+        from iiot_ai_sensor_gateway.forecasting import _baseline_status
+
+        test_metrics = {
+            "baseline_delta": {
+                "overall_rmse_delta": -0.001,
+                "per_target": {
+                    "temperature_c": {"beats_baseline": True},
+                    "humidity_pct": {"beats_baseline": True},
+                    "pressure_hpa": {"beats_baseline": False},
+                },
+            }
+        }
+        self.assertEqual(_baseline_status(test_metrics), "BEATS_BASELINE")
+
 if __name__ == '__main__':
     unittest.main()

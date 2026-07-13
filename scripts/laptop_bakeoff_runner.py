@@ -455,6 +455,11 @@ def train_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> None:
                     "--seed", str(seed),
                     "--device", args.device,
                     "--learning-rate", str(args.learning_rate),
+                    *(
+                        ["--individual"]
+                        if model_type == "fits_official" and args.fits_official_individual
+                        else []
+                    ),
                 ],
                 [model, output / "training.json"],
             )
@@ -521,6 +526,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-download", action="store_true")
     parser.add_argument("--skip-public-prepare", action="store_true")
     parser.add_argument("--skip-lstm", action="store_true")
+    parser.add_argument(
+        "--fits-official-individual",
+        action="store_true",
+        help="train fits_official with per-channel frequency upsampler (paper-style individual)",
+    )
     parser.add_argument("--max-bytes", type=int, default=100 * 1024 * 1024)
     parser.add_argument("--sim-count", type=int, default=5000)
     parser.add_argument("--sim-nodes", type=int, default=3)

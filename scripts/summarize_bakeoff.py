@@ -20,9 +20,17 @@ from typing import Any
 def summarize_metrics(data: dict[str, Any], metrics_path: Path) -> dict[str, Any]:
     gate = data.get("baseline_gate")
     if isinstance(gate, dict):
+        if gate.get("baseline_passed") or (
+            gate.get("passed") and gate.get("rmse_skill_score") is not None and float(gate.get("rmse_skill_score") or 0) > 0
+        ):
+            baseline_status = "BEATS_BASELINE"
+        elif gate.get("model_rmse") is not None and gate.get("baseline_rmse") is not None and float(gate["model_rmse"]) < float(gate["baseline_rmse"]):
+            baseline_status = "MIXED"
+        else:
+            baseline_status = data.get("baseline_comparison_status") or "UNDER_BASELINE"
         return {
             "readiness": data.get("model_readiness"),
-            "baseline_status": "BEATS_BASELINE" if gate.get("baseline_passed", gate.get("passed")) else "MIXED",
+            "baseline_status": baseline_status,
             "skill": gate.get("rmse_skill_score"),
             "passed": bool(gate.get("passed")),
             "baseline_passed": bool(gate.get("baseline_passed", gate.get("passed"))),
@@ -31,6 +39,7 @@ def summarize_metrics(data: dict[str, Any], metrics_path: Path) -> dict[str, Any
             "wins": f"{gate.get('per_target_wins')}/{gate.get('effective_target_count', gate.get('target_count'))}",
             "device": data.get("device"),
             "data_quality_status": (data.get("data_quality") or {}).get("status"),
+            "model_type": data.get("model_type") or data.get("model_version"),
             "path": str(metrics_path),
         }
 
@@ -103,6 +112,38 @@ def build_summary(root: Path) -> dict[str, Any]:
             "runs": runs,
             "aggregates": aggregates,
         }
+    # Honest per-lane ranking over multi-seed means when available.
+    rankings: dict[str, Any] = {}
+    for lane_name, lane_info in summary["lanes"].items():
+        scored = []
+        for family, agg in (lane_info.get("aggregates") or {}).items():
+            skill = (agg.get("skill") or {}).get("mean")
+            if skill is None:
+                continue
+            scored.append(
+                {
+                    "family": family,
+                    "skill_mean": skill,
+                    "skill_std": (agg.get("skill") or {}).get("std"),
+                    "test_rmse_mean": (agg.get("test_rmse") or {}).get("mean"),
+                    "promotion_pass_count": agg.get("promotion_pass_count"),
+                    "run_count": agg.get("run_count"),
+                    "readiness_counts": agg.get("readiness_counts"),
+                }
+            )
+        scored.sort(key=lambda item: float(item["skill_mean"]), reverse=True)
+        rankings[lane_name] = {
+            "ranked_families": scored,
+            "best_family": scored[0]["family"] if scored else None,
+            "evidence_level": "EXPERIMENTAL_PER_LANE_ONLY",
+            "production_ready": False,
+        }
+    summary["lane_rankings"] = rankings
+    summary["notes"] = [
+        "Do not promote from proxy lanes (Gary/UCI/Fidas/sim) to production RAB hardware.",
+        "Prefer multi-seed means over legacy single-run metrics.",
+        "Host CUDA metrics are not Raspberry Pi latency/RSS evidence.",
+    ]
     return summary
 
 

@@ -1,5 +1,7 @@
 # Perbandingan Model AI Sensor
 
+> **Analysis update 13 Juli 2026:** multi-seed CUDA evidence (Gary/UCI) + legacy single-run Fidas/Sim dianalisis di `BAKEOFF_RESULTS_ANALYSIS_2026-07-13.md`. LSTM gate diselaraskan ke majority-win; Fidas OOM diatasi dengan window/sample cap. Ranking production **tetap BELUM**.
+
 > **Methodology update 11 Juli 2026:** ranking CUDA lama di dokumen ini adalah historical artifact evidence dan **tidak boleh lagi dipakai untuk promotion**. Dataset/evaluator sekarang menginfer cadence, menyimpan horizon duration, memilih active feature schema dari train-only, memblokir target constant/saturated, mencatat clipping, memilih baseline per target pada validation split, menolak duplicate/inapplicable SeasonalNaive, dan membutuhkan repeated seeds. Semua artifact lama harus di-bake-off ulang dengan `scripts/laptop_bakeoff_runner.py` sebelum ranking diperbarui.
 
 Tanggal keputusan: 10 Juli 2026.

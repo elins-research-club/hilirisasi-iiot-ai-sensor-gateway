@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .dataset_quality import finite_or_raise
 from .forecast_baselines import (
     baseline_candidates,
     compose_selected_baseline,
@@ -81,10 +82,9 @@ def _load_dataset(path: str | Path) -> dict[str, Any]:
     if missing:
         raise ValueError(f"forecast dataset missing arrays: {missing}")
     result = {name: data[name] for name in data.files}
-    for name in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test"):
-        array = result[name]
-        if not np.isfinite(array).all():
-            raise ValueError(f"forecast dataset contains non-finite values in {name}")
+    finite_or_raise(
+        {name: result[name] for name in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test")}
+    )
     result["feature_names_tuple"] = tuple(str(item) for item in result["feature_names"])
     result["target_names_tuple"] = tuple(str(item) for item in result["target_names"])
     result["target_indices_array"] = result["target_indices"].astype("int64")

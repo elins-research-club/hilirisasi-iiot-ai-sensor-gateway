@@ -879,13 +879,29 @@ def _apply_forecast_strategy(raw_prediction: Any, x: Any, target_indices: Any, s
     return raw_prediction
 
 
-def _baseline_status(test_metrics: dict[str, Any]) -> str:
-    deltas = test_metrics["baseline_delta"]["per_target"].values()
-    wins = sum(1 for item in deltas if item["beats_baseline"])
-    total = len(test_metrics["baseline_delta"]["per_target"])
-    if wins == total and test_metrics["baseline_delta"]["overall_rmse_delta"] < 0:
+def _baseline_status(
+    test_metrics: dict[str, Any],
+    *,
+    effective_target_names: tuple[str, ...] | None = None,
+) -> str:
+    """Align LSTM gate with edge majority-win policy.
+
+    Historical all-target-win rule marked strong models EXPERIMENTAL when one
+    low-variance target (e.g. synthetic Gary pressure) lost while overall skill
+    and majority targets improved.
+    """
+
+    per_target = test_metrics["baseline_delta"]["per_target"]
+    names = effective_target_names or tuple(per_target.keys())
+    if not names:
+        return "UNDER_BASELINE"
+    wins = sum(1 for name in names if per_target[name]["beats_baseline"])
+    total = len(names)
+    overall_better = test_metrics["baseline_delta"]["overall_rmse_delta"] < 0
+    majority = wins >= math.ceil(total / 2)
+    if overall_better and majority:
         return "BEATS_BASELINE"
-    if wins == 0 and test_metrics["baseline_delta"]["overall_rmse_delta"] >= 0:
+    if wins == 0 and not overall_better:
         return "UNDER_BASELINE"
     return "MIXED"
 
@@ -1029,16 +1045,47 @@ def evaluate_lstm_forecast(
     result["nan_count"] = int(sum(np.isnan(data[name]).sum() for name in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test")))
     result["inf_count"] = int(sum(np.isinf(data[name]).sum() for name in ("X_train", "y_train", "X_val", "y_val", "X_test", "y_test")))
     result["data_status"] = "PASS" if result["nan_count"] == 0 and result["inf_count"] == 0 else "FAIL"
-    result["baseline_comparison_status"] = _baseline_status(result["splits"]["test"])
-    quality_passed = bool(data_quality.get("status") == "PASS")
+    effective_targets = tuple(data_quality.get("effective_target_names", target_names))
+    if not effective_targets:
+        effective_targets = target_names
+    result["baseline_comparison_status"] = _baseline_status(
+        result["splits"]["test"],
+        effective_target_names=effective_targets,
+    )
+    test_split = result["splits"]["test"]
+    model_rmse = float(test_split["lstm"]["overall_rmse"])
+    baseline_rmse = float(test_split["validation_selected_baseline"]["overall_rmse"])
+    per_target_wins = sum(
+        1
+        for name in effective_targets
+        if test_split["baseline_delta"]["per_target"][name]["beats_baseline"]
+    )
+    quality_passed = bool(
+        data_quality.get("status") == "PASS"
+        and len(effective_targets) == len(target_names)
+    )
+    baseline_passed = result["baseline_comparison_status"] == "BEATS_BASELINE"
+    result["baseline_gate"] = {
+        "best_baseline": "validation_selected_per_target",
+        "selected_by_target": selection["selected_by_target"],
+        "model_rmse": model_rmse,
+        "baseline_rmse": baseline_rmse,
+        "rmse_skill_score": None if baseline_rmse == 0 else 1.0 - model_rmse / baseline_rmse,
+        "per_target_wins": per_target_wins,
+        "effective_target_count": len(effective_targets),
+        "target_count": len(target_names),
+        "baseline_passed": baseline_passed,
+        "data_quality_passed": quality_passed,
+        "passed": bool(baseline_passed and quality_passed and result["data_status"] == "PASS"),
+    }
     if result["data_status"] != "PASS":
         result["model_readiness"] = "NOT_READY"
-    elif quality_passed and result["baseline_comparison_status"] == "BEATS_BASELINE":
+    elif result["baseline_gate"]["passed"]:
         result["model_readiness"] = "PROMISING"
     else:
         result["model_readiness"] = "EXPERIMENTAL"
     result["quality_gate_passed"] = quality_passed
-    result["status"] = result["data_status"]
+    result["status"] = "PASS" if result["baseline_gate"]["passed"] else result["data_status"]
     output_path = Path(model_path).parent if output_dir is None else Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     metrics_path = output_path / "metrics.json"
