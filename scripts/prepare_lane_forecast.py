@@ -39,6 +39,12 @@ def main(argv: list[str] | None = None) -> int:
         default=0,
         help="0=keep all samples; positive value caps each split after temporal split",
     )
+    parser.add_argument(
+        "--max-window-records",
+        type=int,
+        default=0,
+        help="0=load all windows; positive value head+tail caps huge public lanes before rebuild",
+    )
     args = parser.parse_args(argv)
 
     targets = tuple(item.strip() for item in args.targets.split(",") if item.strip())
@@ -57,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         cadence_relative_tolerance=args.cadence_relative_tolerance,
         max_irregular_fraction=args.max_irregular_fraction,
         max_samples_per_split=args.max_samples_per_split,
+        max_window_records=args.max_window_records,
     )
     print(json.dumps(stats.as_dict(), indent=2))
     return 0

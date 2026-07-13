@@ -57,3 +57,9 @@ firmware/**/sdkconfig*
 # Keep the third-party checkout out of project commits.
 firmware/esp32-c6-sensor-node/lib/BME68x_SensorAPI/
 .graphifyignore
+
+# Remote job queue runtime
+jobs/inbox/
+jobs/running/
+jobs/outbox/
+jobs/logs/

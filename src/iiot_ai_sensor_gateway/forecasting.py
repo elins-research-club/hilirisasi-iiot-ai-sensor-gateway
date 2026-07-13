@@ -333,6 +333,63 @@ def _assert_split_ranges_do_not_overlap(split_time_range: dict[str, Any]) -> Non
             previous_label_end = _parse_dt(node_range["label_end"])
 
 
+def _read_window_records_capped(
+    path: str | Path,
+    *,
+    max_window_records: int = 0,
+) -> list[dict[str, Any]]:
+    """Load window JSONL with an optional hard cap for huge public lanes.
+
+    Cap strategy: keep the first and last temporal slices overall after a cheap
+    line count pass when needed. For uncapped paths this streams once.
+    """
+
+    path = Path(path)
+    if max_window_records < 0:
+        raise ValueError("max_window_records must be >= 0")
+
+    if not max_window_records:
+        records = _read_window_records(path)
+        if not records:
+            raise ValueError("window dataset is empty")
+        return records
+
+    # Two-pass only when capped: count lines, then read selected indices.
+    total = 0
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                total += 1
+    if total == 0:
+        raise ValueError("window dataset is empty")
+    if total <= max_window_records:
+        records = _read_window_records(path)
+        if not records:
+            raise ValueError("window dataset is empty")
+        return records
+
+    head = max_window_records // 2
+    tail = max_window_records - head
+    keep_head = set(range(head))
+    keep_tail = set(range(total - tail, total))
+    keep = keep_head | keep_tail
+    records: list[dict[str, Any]] = []
+    index = 0
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            if index in keep:
+                records.append(json.loads(line))
+            index += 1
+    if not records:
+        raise ValueError("window dataset is empty after cap")
+    # Sort by end timestamp so temporal splits remain ordered.
+    records.sort(key=lambda item: (_parse_dt(item["end_timestamp"]), item.get("node_id", "")))
+    return records
+
+
 def prepare_forecast_dataset(
     windows_jsonl: str | Path,
     output_npz: str | Path = "data/modeling/lstm_forecast_dataset.npz",
@@ -349,13 +406,37 @@ def prepare_forecast_dataset(
     max_irregular_fraction: float = 0.05,
     near_constant_epsilon: float = 1e-8,
     max_samples_per_split: int = 0,
+    max_window_records: int = 0,
 ) -> ForecastDatasetStats:
     if horizon_steps < 1:
         raise ValueError("horizon_steps must be >= 1")
+    if max_window_records < 0:
+        raise ValueError("max_window_records must be >= 0")
     np = _require_numpy()
-    records = _read_window_records(windows_jsonl)
-    selected_window_size = window_size or int(records[0]["shape"][0])
-    records = _rebuild_windows(records, selected_window_size)
+    # Prefer native window size to avoid rebuilding huge public lanes in RAM.
+    # When a larger window is requested, rebuild only after a hard record cap so
+    # laptop-class machines never materialize hundreds of thousands of long windows.
+    selected_window_size = window_size
+    if selected_window_size is None or selected_window_size < 1:
+        # peek first record for native size without loading the whole file
+        with Path(windows_jsonl).open(encoding="utf-8") as handle:
+            first_line = next((line for line in handle if line.strip()), "")
+        if not first_line:
+            raise ValueError("window dataset is empty")
+        first = json.loads(first_line)
+        selected_window_size = int(first["shape"][0])
+    records = _read_window_records_capped(
+        windows_jsonl,
+        max_window_records=max_window_records,
+    )
+    native_size = int(records[0]["shape"][0])
+    if selected_window_size != native_size:
+        # Rebuild is O(N * W) in RAM; force a safe default cap when caller forgot.
+        effective_cap = max_window_records or 60000
+        if len(records) > effective_cap:
+            # keep temporally uniform head/tail mix already applied by reader
+            records = records[:effective_cap]
+        records = _rebuild_windows(records, selected_window_size)
     source_feature_names = _ensure_feature_names(records)
     missing_targets = [name for name in target_names if name not in source_feature_names]
     if missing_targets:
