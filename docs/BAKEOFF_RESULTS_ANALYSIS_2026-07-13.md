@@ -6,7 +6,7 @@
 
 | Lane | Cadence | Window | Horizon | Multi-seed? | Best family (skill mean / best seed) | Catatan |
 |---|---|---|---|---|---|---|
-| **Gary** | 60s | 48 | 5 (~5 min) | ya (42/43/44) | **fits** ~0.13 seed mean; LSTM seed_44 skill ~0.185 tapi pressure kalah | Gary pressure **sintetik** → jangan overclaim |
+| **Gary** | 60s | 48 | 5 (~5 min) | ya (42/43/44) | **lstm_residual** skill mean ~0.146 (4/4 PROMISING after majority rescore); **fits** ~0.138 paling stabil 3/3 wins | pressure sintetik → skill LSTM inflated; prefer fits for edge stability |
 | **UCI** | 3600s | 48 | 5 (~5 jam) | ya | **lstm_residual** ~0.379; **fits** ~0.374 | Outdoor meteo proxy; CO UCI **bukan** co_ppm |
 | **Fidas** | 120s | 12 (post-fix) | 5 (~10 min) | **tidak** (legacy single) | **fits** skill ~0.277 | Perlu re-run multi-seed + cap window |
 | **Sim** | 60s (legacy meta incomplete) | 12 | 5 | **tidak** | **fits** skill ~0.256 | Full RAB fields; butuh re-run v3 |
@@ -31,8 +31,9 @@
 
 4. **LSTM residual**  
    - UCI juara skill (~**0.379**).  
-   - Gary overall skill bagus tapi **pressure_hpa kalah** → dulu status MIXED/EXPERIMENTAL karena gate all-wins.  
-   - **Patch 13 Jul:** gate LSTM diselaraskan ke majority-win seperti edge.
+   - Gary overall skill bagus tapi **pressure_hpa sering kalah** (target sintetik rendah-variansi).  
+   - **Patch 13 Jul:** gate LSTM diselaraskan ke majority-win; offline rescore → Gary LSTM seed 42/43/44 **PROMISING** (pass 4/4).  
+   - Tetap **bukan** default edge: params/latency jauh lebih besar dari FITS/DLinear.
 
 ## Bug / improvement yang diimplementasikan
 
