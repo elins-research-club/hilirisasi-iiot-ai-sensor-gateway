@@ -18,7 +18,9 @@ def main() -> int:
         "job_id": job_id,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "command": args.command,
-        "workdir": args.workdir or str(ROOT),
+        # Empty means "use the agent's Windows RepoRoot". Never serialize the
+        # enqueue host's Linux ROOT as a Windows workdir.
+        "workdir": args.workdir,
     }
     path = inbox / f"{job_id}.job.json"
     tmp = path.with_suffix(".tmp")
