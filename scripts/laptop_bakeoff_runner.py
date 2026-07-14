@@ -107,6 +107,10 @@ def source_fingerprint() -> str:
             if path.is_file()
             and path.suffix.lower() in {".py", ".toml", ".json", ".sh", ".ps1", ".cmd"}
             and "__pycache__" not in path.parts
+            # Job transport does not affect preprocessing/training/evaluation.
+            # Excluding it prevents an agent-only hotfix from invalidating a
+            # completed multi-hour bake-off fingerprint.
+            and not (base == ROOT / "scripts" and "remote" in path.relative_to(base).parts)
         )
     for path in sorted(files):
         digest.update(str(path.relative_to(ROOT)).encode("utf-8"))
@@ -368,7 +372,7 @@ def lane_definitions() -> dict[str, Lane]:
                 "co2_ppm",
                 "pm25_ug_m3",
             ),
-            120,
+            12,
             1440,
         ),
     }

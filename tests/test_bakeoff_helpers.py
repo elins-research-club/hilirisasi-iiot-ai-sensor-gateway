@@ -95,6 +95,14 @@ class BakeoffHelperTests(unittest.TestCase):
         runner_module = _load_script("laptop_bakeoff_runner.py")
         self.assertTrue(runner_module.outputs_ready([]))
 
+    def test_lane_windows_match_locked_bakeoff_methodology(self):
+        runner_module = _load_script("laptop_bakeoff_runner.py")
+        lanes = runner_module.lane_definitions()
+        self.assertEqual(lanes["gary"].window_size, 48)
+        self.assertEqual(lanes["uci"].window_size, 48)
+        self.assertEqual(lanes["fidas"].window_size, 12)
+        self.assertEqual(lanes["sim"].window_size, 12)
+
     def test_remote_enqueue_default_workdir_is_resolved_by_windows_agent(self):
         script = ROOT / "scripts" / "remote" / "enqueue_job.py"
         with tempfile.TemporaryDirectory() as tmp:
