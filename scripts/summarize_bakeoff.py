@@ -89,13 +89,30 @@ def build_summary(root: Path) -> dict[str, Any]:
             continue
         runs: dict[str, Any] = {}
         grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for metrics_path in sorted(lane_dir.rglob("metrics.json")):
+        metric_paths = sorted(lane_dir.rglob("metrics.json"))
+        run_keys = {
+            path: str(path.parent.relative_to(lane_dir)).replace("\\", "/")
+            for path in metric_paths
+        }
+        repeated_families = {
+            key.split("/", 1)[0]
+            for key in run_keys.values()
+            if "/seed_" in key
+        }
+        for metrics_path in metric_paths:
             data = json.loads(metrics_path.read_text(encoding="utf-8-sig"))
-            run_key = str(metrics_path.parent.relative_to(lane_dir)).replace("\\", "/")
+            run_key = run_keys[metrics_path]
             model_family = run_key.split("/", 1)[0]
             item = summarize_metrics(data, metrics_path)
+            # Keep legacy root runs visible for audit, but once repeated seeds
+            # exist do not bias family aggregates with the old single run.
+            aggregate_included = not (
+                model_family in repeated_families and "/" not in run_key
+            )
+            item["aggregate_included"] = aggregate_included
             runs[run_key] = item
-            grouped[model_family].append(item)
+            if aggregate_included:
+                grouped[model_family].append(item)
         aggregates: dict[str, Any] = {}
         for model_family, items in sorted(grouped.items()):
             skills = [float(item["skill"]) for item in items if item.get("skill") is not None]

@@ -156,6 +156,41 @@ class BakeoffHelperTests(unittest.TestCase):
             self.assertAlmostEqual(aggregate["skill"]["mean"], 0.2)
             self.assertGreater(aggregate["skill"]["std"], 0.0)
 
+    def test_summary_excludes_legacy_root_run_when_seed_runs_exist(self):
+        summary = _load_script("summarize_bakeoff.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for relative, skill in (
+                ("lane/fits/metrics.json", 0.9),
+                ("lane/fits/seed_42/metrics.json", 0.1),
+                ("lane/fits/seed_43/metrics.json", 0.3),
+            ):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    json.dumps(
+                        {
+                            "model_readiness": "PROMISING",
+                            "baseline_gate": {
+                                "passed": True,
+                                "baseline_passed": True,
+                                "data_quality_passed": True,
+                                "rmse_skill_score": skill,
+                                "model_rmse": 0.2,
+                                "per_target_wins": 1,
+                                "effective_target_count": 1,
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            result = summary.build_summary(root)
+            aggregate = result["lanes"]["lane"]["aggregates"]["fits"]
+            self.assertEqual(aggregate["run_count"], 2)
+            self.assertAlmostEqual(aggregate["skill"]["mean"], 0.2)
+            self.assertFalse(result["lanes"]["lane"]["runs"]["fits"]["aggregate_included"])
+            self.assertTrue(result["lanes"]["lane"]["runs"]["fits/seed_42"]["aggregate_included"])
+
     def test_summary_reads_lstm_metrics_schema(self):
         summary = _load_script("summarize_bakeoff.py")
         metrics = {
