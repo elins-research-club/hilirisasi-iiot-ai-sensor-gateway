@@ -33,6 +33,8 @@ Write-Host "Laptop agent watching $inbox"
 while ($true) {
   $jobs = Get-ChildItem -Path $inbox -Filter "*.job.json" -ErrorAction SilentlyContinue | Sort-Object Name
   foreach ($file in $jobs) {
+    $job = $null
+    $dest = $null
     try {
       $raw = Get-Content -Raw -Path $file.FullName
       $job = $raw | ConvertFrom-Json
@@ -52,9 +54,14 @@ while ($true) {
     } catch {
       Write-Host "ERROR $($file.Name): $_"
       try {
-        $job = @{ job_id = $file.BaseName; command = "unknown" }
+        if (-not $job) {
+          $fallbackId = $file.Name -replace '\.job\.json$', ''
+          $job = @{ job_id = $fallbackId; command = "unknown" }
+        }
         Write-Result $job "failed" 1 ""
+        if ($dest) { Remove-Item -Force $dest -ErrorAction SilentlyContinue }
       } catch {}
+      Set-Location $RepoRoot
     }
   }
   if ($Once) { break }

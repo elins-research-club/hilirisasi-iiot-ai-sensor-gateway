@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -93,6 +94,26 @@ class BakeoffHelperTests(unittest.TestCase):
     def test_outputs_ready_allows_probe_only_steps(self):
         runner_module = _load_script("laptop_bakeoff_runner.py")
         self.assertTrue(runner_module.outputs_ready([]))
+
+    def test_remote_enqueue_default_workdir_is_resolved_by_windows_agent(self):
+        script = ROOT / "scripts" / "remote" / "enqueue_job.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            # The script's ROOT is fixed to the repo, so capture and remove the
+            # generated ignored runtime file after asserting the payload.
+            job_id = "unit-test-empty-workdir"
+            target = ROOT / "jobs" / "inbox" / f"{job_id}.job.json"
+            try:
+                subprocess.run(
+                    [sys.executable, str(script), "--job-id", job_id, "--command", "echo ok"],
+                    check=True,
+                    cwd=tmp,
+                    capture_output=True,
+                    text=True,
+                )
+                payload = json.loads(target.read_text(encoding="utf-8"))
+                self.assertEqual(payload["workdir"], "")
+            finally:
+                target.unlink(missing_ok=True)
 
     def test_summary_aggregates_nested_seed_runs(self):
         summary = _load_script("summarize_bakeoff.py")
