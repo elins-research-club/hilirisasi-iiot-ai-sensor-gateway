@@ -320,3 +320,4 @@ Lihat:
 - `docs/architecture-preprocessing-split.md`
 - `docs/LAPTOP_CUDA_BAKEOFF.md`
 - `docs/MODEL_COMPARISON.md`
+- `docs/BAKEOFF_RESULTS_ANALYSIS_2026-07-14.md`

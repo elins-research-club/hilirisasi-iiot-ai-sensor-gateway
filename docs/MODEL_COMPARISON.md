@@ -1,6 +1,6 @@
 # Perbandingan Model AI Sensor
 
-> **Analysis update 13 Juli 2026:** multi-seed CUDA evidence (Gary/UCI) + legacy single-run Fidas/Sim dianalisis di `BAKEOFF_RESULTS_ANALYSIS_2026-07-13.md`. LSTM gate diselaraskan ke majority-win; Fidas OOM diatasi dengan window/sample cap. Ranking production **tetap BELUM**.
+> **Analysis update 14 Juli 2026:** full repeated-seed CUDA Gary/UCI/Fidas/Sim + validation-first parameter refinement dianalisis di `BAKEOFF_RESULTS_ANALYSIS_2026-07-14.md`. FITS-inspired menjadi kandidat edge paling konsisten; default LR `1e-3` dipertahankan karena LR `2e-3` tidak memberi test gain yang konsisten. Ranking production **tetap BELUM**.
 
 > **Methodology update 11 Juli 2026:** ranking CUDA lama di dokumen ini adalah historical artifact evidence dan **tidak boleh lagi dipakai untuk promotion**. Dataset/evaluator sekarang menginfer cadence, menyimpan horizon duration, memilih active feature schema dari train-only, memblokir target constant/saturated, mencatat clipping, memilih baseline per target pada validation split, menolak duplicate/inapplicable SeasonalNaive, dan membutuhkan repeated seeds. Semua artifact lama harus di-bake-off ulang dengan `scripts/laptop_bakeoff_runner.py` sebelum ranking diperbarui.
 
@@ -11,9 +11,9 @@ Status jujur:
 
 - **Production promotion: BELUM.** Data real RAB + Pi latency/RSS/false-alert/day masih open.
 - Empat lane selesai: Gary, UCI, Fidas, dan simulator; semua training artifact mencatat `device: cuda`.
-- Ranking FITS/LSTM/DLinear lama tetap berguna sebagai diagnosis, tetapi cadence/baseline/schema/degenerate-target gate lama belum cukup ketat.
-- Simulator lama memiliki CO/CO₂/PM2.5 konstan pada test split; simulator v3 telah dibatasi rise/recovery, tetapi full CUDA bake-off baru belum dijalankan.
-- Laporan lengkap: `LAPTOP_CUDA_BAKEOFF_RESULTS_2026-07-11.md`.
+- Legacy ranking tetap hanya historical diagnosis; current ranking memakai evaluator hardened dan repeated seeds.
+- Simulator lama memiliki target konstan; simulator v3 bounded sudah di-bake-off ulang 3 seed dan FITS menang dengan mean skill +0,36261, std 0,00024.
+- Laporan current: `BAKEOFF_RESULTS_ANALYSIS_2026-07-14.md`; laporan 11/13 Juli historical.
 - Streaming native + River: wiring E2E OK, **EXPERIMENTAL** (bukan quality bake-off).
 
 ## Ranking Praktis Historical (sebelum methodology hardening)
@@ -228,8 +228,8 @@ L3 LSTM residual sebagai challenger nonlinear per lane
 L4 FITS official-style + River sebagai research challengers
 ```
 
-**Historical candidate signal:** FITS-inspired dan LSTM menunjukkan hasil menarik pada sebagian lane, tetapi belum boleh diranking ulang sebelum bake-off repeated-seed dengan evaluator baru selesai.
+**Current proxy signal:** FITS-inspired paling konsisten lintas lane: Gary +0,13135, Fidas +0,05722, Sim +0,36261; UCI +0,37428 sedikit di bawah LSTM +0,37891. Semua angka adalah mean 3 seed dan tetap bukan production evidence.
 
 **Current engineering priority:** validitas dataset/evaluator dan real RAB capture lebih penting daripada menambah model baru.
 
-**Bukan pemenang production:** seluruh hasil masih proxy/simulation. Promosi final menunggu bake-off ulang, data sensor RAB, repeated seeds, leave-device/site evaluation, real-label false-alert/day/delay, dan pengukuran Raspberry Pi. Artifact lama tidak dihapus, tetapi readiness-nya tetap `EXPERIMENTAL`.
+**Bukan pemenang production:** seluruh hasil masih proxy/simulation. Promosi final menunggu data sensor RAB, repeated real-device evaluation, leave-device/site evaluation, real-label false-alert/day/delay, dan pengukuran Raspberry Pi. Artifact lama tidak dihapus, tetapi readiness-nya tetap historical/experimental.

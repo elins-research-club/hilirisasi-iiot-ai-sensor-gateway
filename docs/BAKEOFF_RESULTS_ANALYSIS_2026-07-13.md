@@ -1,5 +1,7 @@
-# Analisis Bake-off CUDA (13 Juli 2026)
+# Analisis Bake-off CUDA (13 Juli 2026) — Historical
 
+> **Superseded:** full repeated-seed Fidas+Sim, parameter refinement, dan ranking final tersedia di `BAKEOFF_RESULTS_ANALYSIS_2026-07-14.md`. Angka di bawah dipertahankan sebagai jejak historical dan tidak boleh dipakai sebagai ranking terkini.
+>
 > Evidence level: **EXPERIMENTAL / proxy lanes only**. Bukan production RAB, bukan Raspberry Pi.
 
 ## Ringkasan jujur
