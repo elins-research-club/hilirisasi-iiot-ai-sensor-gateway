@@ -133,4 +133,4 @@ Setelah seleksi validation selesai, enam checkpoint LR `2e-3` dievaluasi satu ka
 - FITS repository: https://github.com/VEWOXIC/FITS
 - DLinear, AAAI 2023: https://ojs.aaai.org/index.php/AAAI/article/view/26317/26089
 
-Implementasi repo tetap disebut **FITS-inspired** dan **fits_official-style**, bukan reproduksi bit-for-bit paper.
+Implementasi repo tetap disebut **FITS-inspired** dan **fits_official-style**, bukan reproduksi bit-for-bit paper. Khusus `fits_official-style`, dataset proyek memakai label direct `t+5` tetapi internal `pred_len=1`; jadi interpolation ratio-nya bukan reproduksi horizon lima langkah FITS resmi. Reproduksi yang lebih fair membutuhkan internal `pred_len=5`, target kontigu `t+1…t+5`, lalu scoring langkah kelima. Hasil `fits_official-style` saat ini hanya research comparator dan tidak dipakai untuk memilih default edge.
