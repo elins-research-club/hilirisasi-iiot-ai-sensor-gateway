@@ -20,6 +20,17 @@ python3 scripts/remote/enqueue_job.py --command "py -3.13 scripts\laptop_bakeoff
 
 Hasil: `jobs/outbox/<job_id>.result.json` + `jobs/logs/<job_id>.log` (sync balik ke VPS).
 
+### Recovery tombstone Syncthing setelah cleanup
+
+Bila dashboard Syncthing VPS menunjukkan `needDeletes` remote yang hanya berisi folder cache/legacy, samakan policy ignore lokal Windows lalu minta rescan:
+
+```powershell
+cd C:\vscode\IIOT-Project\iiot-ai-sensor-gateway
+powershell -ExecutionPolicy Bypass -File .\scripts\remote\fix_syncthing_ignored_tombstones.ps1
+```
+
+Helper ini fail-closed bila folder ID/path tidak cocok. Ia hanya menulis `.stignore` untuk cache/build regenerable dan memanggil API Syncthing lokal untuk rescan; tidak menghapus source, dataset, model, archive, atau `.stversions`.
+
 ## Opsi B (penuh): OpenSSH Server di Windows + Tailscale
 
 1. Laptop online di Tailscale (`grey`).

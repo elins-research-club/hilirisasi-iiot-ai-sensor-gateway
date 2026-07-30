@@ -9,6 +9,7 @@ from typing import Any
 from .config import AppConfig
 from .parser import PayloadParser
 from .validation import ReadingValidator
+from .window_paths import resolve_windows_path
 
 TARGET_FIELDS = ('temperature_c', 'humidity_pct', 'pressure_hpa', 'bme_gas_raw', 'co_raw')
 USED_COLUMNS = ('temp', 'humidity', 'co', 'lpg', 'smoke')
@@ -89,7 +90,7 @@ def evaluate_preprocessing(
     features = 0
     nan_count = 0
     inf_count = 0
-    windows_path = Path(windows_jsonl)
+    windows_path = resolve_windows_path(windows_jsonl)
     if windows_path.exists():
         for line in windows_path.read_text(encoding='utf-8').splitlines():
             if not line.strip():

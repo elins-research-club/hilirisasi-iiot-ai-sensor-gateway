@@ -88,9 +88,10 @@ hardware_observations.jsonl      L1 parsed hardware observation
 canonical_observations.jsonl     L2 validation + semantic preprocessing
 processed_timeseries.jsonl       L3 resampled, source_event_ids retained
 windows.jsonl                    L4 model window
-lstm_windows.jsonl               L4 training/evaluation window
 normalization_report.json        clipping/out-of-range telemetry
 ```
+
+`windows.jsonl` adalah satu-satunya artifact window yang ditulis pipeline. Reader masih menerima nama lama `lstm_windows.jsonl` sebagai fallback migration bila file yang diminta tidak ada, tetapi pipeline tidak lagi membuat salinan kedua.
 
 Filter gateway diisolasi oleh `(gateway_id,node_id,boot_id,field)`. Resampling diisolasi oleh `(gateway_id,node_id,room_id,time_bucket)`. Bucket dengan preprocessing version berbeda ditolak.
 
@@ -180,7 +181,7 @@ $PY scripts/download_dataset.py uci_air_quality_360 \
 
 ```bash
 $PY run_gateway.py prepare-forecast-dataset \
-  --windows data/processed/lstm_windows.jsonl \
+  --windows data/processed/windows.jsonl \
   --output-npz data/modeling/forecast.npz \
   --output-meta data/modeling/forecast-meta.json \
   --horizon-steps 5 \

@@ -174,9 +174,10 @@ hardware_observations.jsonl
 canonical_observations.jsonl
 processed_timeseries.jsonl
 windows.jsonl
-lstm_windows.jsonl
 normalization_report.json
 ```
+
+`windows.jsonl` adalah nama canonical tunggal. `lstm_windows.jsonl` hanya alias reader-side untuk artifact lokal lama dan tidak ditulis oleh run baru.
 
 L3 memiliki `source_event_ids` dan `preprocessing_version`. Mixed preprocessing versions dalam bucket yang sama ditolak.
 

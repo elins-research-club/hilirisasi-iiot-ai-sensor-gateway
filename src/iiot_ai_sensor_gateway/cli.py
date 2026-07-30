@@ -46,6 +46,7 @@ from .simulator import SCENARIOS, write_simulation
 from .streaming_detection import RiverDependencyError, run_streaming_detection
 from .validation import ReadingValidator
 from .windowing import WindowBuilder
+from .window_paths import canonical_windows_path
 
 
 def _parse_string_list(value: str) -> tuple[str, ...]:
@@ -139,14 +140,14 @@ def build_parser() -> argparse.ArgumentParser:
     ev = sub.add_parser('evaluate', help='evaluate canonical preprocessing output')
     ev.add_argument('--config', default='config/default.toml')
     ev.add_argument('--canonical', default='data/canonical/gary_stafford_canonical.jsonl')
-    ev.add_argument('--windows', default='data/processed/lstm_windows.jsonl')
+    ev.add_argument('--windows', default='data/processed/windows.jsonl')
     ev.add_argument('--output', default='data/evaluation/gary_preprocessing_eval.json')
     ev.add_argument('--input-source', default='gary_stafford_canonical_or_compact_payload')
     ev.add_argument('--simulation-layer', default='dataset_or_esp32_light_preprocessing')
     ev.add_argument('--gateway-layer', default='raspberry_pi_pre_model_pipeline')
     prep_forecast = sub.add_parser('prepare-forecast-dataset', help='build temporal X/y dataset for LSTM forecasting')
     prep_forecast.add_argument('--config', default='config/default.toml')
-    prep_forecast.add_argument('--windows', default='data/processed/lstm_windows.jsonl')
+    prep_forecast.add_argument('--windows', default='data/processed/windows.jsonl')
     prep_forecast.add_argument('--output-npz', default='data/modeling/lstm_forecast_dataset.npz')
     prep_forecast.add_argument('--output-meta', default='data/modeling/lstm_forecast_dataset_meta.json')
     prep_forecast.add_argument('--horizon-steps', type=int, default=5)
@@ -178,13 +179,13 @@ def build_parser() -> argparse.ArgumentParser:
     eval_forecast.add_argument('--seasonal-period', type=_nonnegative_int, default=0)
     pred_forecast = sub.add_parser('predict-lstm-forecast', help='predict normalized sensor targets from windows')
     pred_forecast.add_argument('--config', default='config/default.toml')
-    pred_forecast.add_argument('--windows', default='data/processed/lstm_windows.jsonl')
+    pred_forecast.add_argument('--windows', default='data/processed/windows.jsonl')
     pred_forecast.add_argument('--model', default='models/lstm_forecast/latest/model.pt')
     pred_forecast.add_argument('--output', default='models/lstm_forecast/latest/predictions.jsonl')
     pred_forecast.add_argument('--max-windows', type=int, default=0)
     pred_forecast.add_argument('--device', default='auto')
     experiments = sub.add_parser('run-forecast-experiments', help='run LSTM forecasting experiments across horizons and hidden sizes')
-    experiments.add_argument('--windows', default='data/processed/lstm_windows.jsonl')
+    experiments.add_argument('--windows', default='data/processed/windows.jsonl')
     experiments.add_argument('--output-dir', default='models/forecast_experiments/latest')
     experiments.add_argument('--horizons', type=_parse_int_list, default=(5, 15, 30))
     experiments.add_argument('--hidden-sizes', type=_parse_int_list, default=(32, 64))
@@ -339,8 +340,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
                 break
     with (
         (output_dir / 'processed_timeseries.jsonl').open('w', encoding='utf-8') as processed_file,
-        (output_dir / 'windows.jsonl').open('w', encoding='utf-8') as windows_file,
-        (output_dir / 'lstm_windows.jsonl').open('w', encoding='utf-8') as dataset_file,
+        canonical_windows_path(output_dir).open('w', encoding='utf-8') as windows_file,
     ):
         for identity in sorted(by_node):
             rows = sorted(by_node[identity], key=lambda item: item.reading.timestamp)
@@ -369,7 +369,6 @@ def run_pipeline(args: argparse.Namespace) -> int:
                     continue
                 record = json.dumps(window.as_record(), separators=(',', ':'))
                 windows_file.write(record + '\n')
-                dataset_file.write(record + '\n')
     (output_dir / 'normalization_report.json').write_text(
         json.dumps(normalizer.report(), indent=2), encoding='utf-8'
     )

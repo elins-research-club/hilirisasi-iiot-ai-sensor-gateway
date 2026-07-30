@@ -105,6 +105,7 @@ Aturan:
 - UCI Air Quality dan Bristol BME680 bukan bukti chip-identical terhadap hardware proyek;
 - Gary hanya regression/compatibility lane;
 - jangan commit dataset besar, `data/`, `models/`, checkpoint, cache, log, credential, atau artifact runtime.
+- artifact window canonical hanya `windows.jsonl`; nama lama `lstm_windows.jsonl` didukung reader sebagai fallback migration tanpa membuat copy kedua.
 
 ## Model Policy
 
@@ -147,9 +148,20 @@ Setiap perubahan firmware, contract, parser, validation, feature, receiver, data
 - `../Project Context/BACKEND_MQTT_OPENCLAW.md`;
 - `../Project Context/DEV_TASKS.md`.
 
+## Graphify + CRG (wajib — hard gate root)
+
+Ikuti root `../AGENTS.md` § **Graphify + CRG — HARD GATE** dan `../Project Context/GRAPH_MEMORY_OPERATIONS.md`.
+
+Untuk setiap task audit/implementasi/bugfix/review/model/pipeline di repo ini:
+
+1. **Graphify dulu** (≥4 calls): stats + query task (contoh `compact_sensor.v3 HardwareIntegrityGate`, `sensor_ai.v1 preprocessing windowing`, `ESP32-C6 vs gateway boundary`) + neighbors/community/path.
+2. **CRG sebelum patch/review selesai** (≥3 calls): `detect_changes` + impact/review_context + affected flows / tests_for.
+3. Final response sertakan `GRAPH_GATE: PASS|FAIL` + tools + findings.
+4. Graph tidak menggantikan source/test/firmware build; verifikasi file aktual setelah navigasi graph.
+
 ## Coding Rules
 
-- Baca sebelum edit dan periksa dirty state.
+- Jalankan hard gate Graphify+CRG sebelum eksplorasi besar/edit. Baca sebelum edit dan periksa dirty state.
 - Jangan overwrite perubahan lokal tanpa review.
 - Runtime receiver/core stdlib-first; NumPy/PyTorch/River opsional.
 - Firmware ESP32 ditulis C++/ESP-IDF melalui PlatformIO.
@@ -183,6 +195,7 @@ Build hardware hanya membuktikan kompilasi profile. Sensor fisik, bridge UART, E
 
 Final response harus menyebut:
 
+- blok `GRAPH_GATE` (Graphify tools + CRG tools + findings);
 - file kode/firmware yang berubah;
 - docs dan Project Context yang diperbarui;
 - command verifikasi dan hasil nyata;

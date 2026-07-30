@@ -89,7 +89,6 @@ hardware_observations.jsonl
 canonical_observations.jsonl
 processed_timeseries.jsonl
 windows.jsonl
-lstm_windows.jsonl
 normalization_report.json
 ```
 

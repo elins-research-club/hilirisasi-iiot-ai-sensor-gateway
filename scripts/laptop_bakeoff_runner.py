@@ -404,7 +404,7 @@ def prepare_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> bool:
             lane.processed_dir / "hardware_observations.jsonl",
             lane.processed_dir / "canonical_observations.jsonl",
             lane.processed_dir / "processed_timeseries.jsonl",
-            lane.processed_dir / "lstm_windows.jsonl",
+            lane.processed_dir / "windows.jsonl",
             lane.processed_dir / "normalization_report.json",
         ],
     )
@@ -412,7 +412,7 @@ def prepare_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> bool:
         f"lane/{lane.slug}/dataset",
         [
             "scripts/prepare_lane_forecast.py",
-            "--windows", str(lane.processed_dir / "lstm_windows.jsonl"),
+            "--windows", str(lane.processed_dir / "windows.jsonl"),
             "--output-npz", str(lane.dataset_path),
             "--output-meta", str(lane.meta_path),
             "--targets", ",".join(lane.targets),

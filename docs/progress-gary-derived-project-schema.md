@@ -52,7 +52,7 @@ Mapping:
 ```powershell
 py -3.13 run_gateway.py derive-gary-schema --input-csv iot_telemetry_data.csv --output-csv data/derived/gary_project_sensor_schema.csv --output-jsonl data/derived/gary_project_sensor_schema.jsonl --output-payloads data/derived/gary_project_sensor_payloads.jsonl
 py -3.13 run_gateway.py run --input-file data/derived/gary_project_sensor_payloads.jsonl --output-dir data/processed
-py -3.13 run_gateway.py evaluate --canonical data/derived/gary_project_sensor_payloads.jsonl --windows data/processed/lstm_windows.jsonl --output data/evaluation/gary_project_schema_eval.json --input-source gary_derived_project_schema_payload --simulation-layer project_schema_derivation --gateway-layer raspberry_pi_pre_model_pipeline
+py -3.13 run_gateway.py evaluate --canonical data/derived/gary_project_sensor_payloads.jsonl --windows data/processed/windows.jsonl --output data/evaluation/gary_project_schema_eval.json --input-source gary_derived_project_schema_payload --simulation-layer project_schema_derivation --gateway-layer raspberry_pi_pre_model_pipeline
 ```
 
 ## Hasil Evaluasi

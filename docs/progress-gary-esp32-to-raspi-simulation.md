@@ -68,7 +68,7 @@ Preprocessing ringan ESP32-like di simulator:
 ```powershell
 py -3.13 run_gateway.py simulate-gary-esp32 --input-csv iot_telemetry_data.csv --output data/simulated/gary_esp32_lora_payloads.jsonl
 py -3.13 run_gateway.py run --input-file data/simulated/gary_esp32_lora_payloads.jsonl --output-dir data/processed
-py -3.13 run_gateway.py evaluate --canonical data/simulated/gary_esp32_lora_payloads.jsonl --windows data/processed/lstm_windows.jsonl --output data/evaluation/gary_esp32_to_raspi_eval.json --input-source gary_esp32_simulated_lora_payload --simulation-layer esp32_light_preprocessing --gateway-layer raspberry_pi_pre_model_pipeline
+py -3.13 run_gateway.py evaluate --canonical data/simulated/gary_esp32_lora_payloads.jsonl --windows data/processed/windows.jsonl --output data/evaluation/gary_esp32_to_raspi_eval.json --input-source gary_esp32_simulated_lora_payload --simulation-layer esp32_light_preprocessing --gateway-layer raspberry_pi_pre_model_pipeline
 ```
 
 ## Hasil Evaluasi

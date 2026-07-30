@@ -21,7 +21,7 @@ NO₂ tidak menjadi target ppm. Missing target harus ditangani pada dataset prep
 ```bash
 PY=/home/ubuntu/.hermes/hermes-agent/venv/bin/python3
 $PY run_gateway.py prepare-forecast-dataset \
-  --windows data/processed/lstm_windows.jsonl \
+  --windows data/processed/windows.jsonl \
   --output-npz data/modeling/lstm_forecast_dataset.npz \
   --output-meta data/modeling/lstm_forecast_dataset_meta.json \
   --horizon-steps 5
@@ -60,7 +60,7 @@ Loader memakai:
 
 ```bash
 $PY run_gateway.py run-forecast-experiments \
-  --windows data/processed/lstm_windows.jsonl \
+  --windows data/processed/windows.jsonl \
   --output-dir models/forecast_experiments/latest \
   --horizons 5,15,30 \
   --window-sizes 12,24,36 \

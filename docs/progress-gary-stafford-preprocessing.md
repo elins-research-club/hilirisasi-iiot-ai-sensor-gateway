@@ -40,7 +40,7 @@ Alur di dokumen ini adalah jalur direct canonical untuk debugging pipeline:
 5. Feature extraction membuat raw feature, delta feature, rolling gas mean/std, missing count, valid ratio, dan sequence gap count.
 6. Feature dinormalisasi dengan min-max config.
 7. Window dibuat dengan 12 timestep per sample.
-8. Output ditulis ke data/processed/lstm_windows.jsonl.
+8. Output ditulis ke data/processed/windows.jsonl.
 
 Alur simulasi utama yang direkomendasikan sekarang:
 

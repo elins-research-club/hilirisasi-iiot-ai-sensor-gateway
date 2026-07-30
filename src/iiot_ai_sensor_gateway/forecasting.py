@@ -23,6 +23,7 @@ from .forecast_baselines import (
     select_baseline_per_target,
 )
 from .normalization import DEFAULT_RANGES
+from .window_paths import resolve_windows_path
 
 TARGET_NAMES = (
     "temperature_c",
@@ -130,8 +131,9 @@ def _utc_now() -> str:
 
 
 def _read_window_records(windows_jsonl: str | Path) -> list[dict[str, Any]]:
+    windows_path = resolve_windows_path(windows_jsonl)
     records: list[dict[str, Any]] = []
-    for line in Path(windows_jsonl).read_text(encoding="utf-8").splitlines():
+    for line in windows_path.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         record = json.loads(line)
@@ -140,7 +142,7 @@ def _read_window_records(windows_jsonl: str | Path) -> list[dict[str, Any]]:
             raise ValueError(f"invalid window shape: {shape}")
         records.append(record)
     if not records:
-        raise ValueError(f"no windows found in {windows_jsonl}")
+        raise ValueError(f"no windows found in {windows_path}")
     return records
 
 
@@ -344,7 +346,7 @@ def _read_window_records_capped(
     line count pass when needed. For uncapped paths this streams once.
     """
 
-    path = Path(path)
+    path = resolve_windows_path(path)
     if max_window_records < 0:
         raise ValueError("max_window_records must be >= 0")
 
@@ -408,6 +410,7 @@ def prepare_forecast_dataset(
     max_samples_per_split: int = 0,
     max_window_records: int = 0,
 ) -> ForecastDatasetStats:
+    windows_jsonl = resolve_windows_path(windows_jsonl)
     if horizon_steps < 1:
         raise ValueError("horizon_steps must be >= 1")
     if max_window_records < 0:
@@ -1409,7 +1412,7 @@ def _experiment_row(run_id: str, stats: ForecastDatasetStats, training: dict[str
 
 
 def run_forecast_experiments(
-    windows_jsonl: str | Path = "data/processed/lstm_windows.jsonl",
+    windows_jsonl: str | Path = "data/processed/windows.jsonl",
     output_dir: str | Path = "models/forecast_experiments/latest",
     horizons: tuple[int, ...] = (5, 15, 30),
     hidden_sizes: tuple[int, ...] = (32, 64),
