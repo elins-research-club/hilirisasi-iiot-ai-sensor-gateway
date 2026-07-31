@@ -49,6 +49,9 @@ data/derived/
 iot_telemetry_data.csv
 data/canonical/
 data/evaluation/
+# V3D prepared arrays, benchmark outputs, manifests, and run-level results are local evidence artifacts.
+# Canonical small summaries are copied to the essay repository after hash verification.
+data/v3d/
 firmware/**/.pio/
 firmware/**/.vscode/
 firmware/**/sdkconfig*

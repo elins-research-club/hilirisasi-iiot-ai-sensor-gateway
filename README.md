@@ -271,6 +271,24 @@ Properties:
 
 Wrappers `.sh`, `.ps1`, dan `.cmd` hanya meneruskan ke runner Python.
 
+## V3D Real-Data Benchmark
+
+Branch riset V3D menambahkan benchmark terisolasi untuk tiga dataset nyata: UCI Air Quality, Beijing Multi-Site Air Quality, dan Intel Berkeley Lab Sensor Data. Benchmark memakai split kronologis, normalisasi train-only, baseline selection pada validation, lima seed, serta pengukuran resource pada mesin aktual.
+
+```bash
+PY=/home/ubuntu/.hermes/hermes-agent/venv/bin/python3
+PYTHONPATH=src $PY scripts/v3d_real_data_benchmark.py prepare \
+  --datasets uci,beijing,intel
+PYTHONPATH=src $PY scripts/v3d_real_data_benchmark.py benchmark \
+  --datasets uci,beijing,intel \
+  --models dlinear,fits,lstm,patchtst \
+  --seeds 42,43,44,45,46 \
+  --epochs 12 --patience 3 --batch-size 256
+$PY scripts/v3d_analysis_pack.py
+```
+
+PatchTST yang diuji merupakan adaptasi project kompak, bukan reproduksi bit-for-bit kode resmi. Detail protokol, checksum, hasil 60 run, dan evidence boundary tersedia di `docs/v3d-real-data-benchmark.md`.
+
 ## MQTT Contract
 
 ```text

@@ -115,6 +115,48 @@
       ]
     },
     {
+      "id": "beijing_multi_site_air_quality_501",
+      "name": "Beijing Multi-Site Air Quality",
+      "lane": "multi_site_reference_air_quality",
+      "landing_url": "https://archive.ics.uci.edu/dataset/501/beijing+multi+site+air+quality+data",
+      "download_url": "https://archive.ics.uci.edu/static/public/501/beijing+multi+site+air+quality+data.zip",
+      "download_filename": "beijing_multi_site_air_quality_501.zip",
+      "license": "CC BY 4.0",
+      "download_mode": "script_allowed",
+      "sha256": "b04da438b2f331ac0ffd45aebdfec0d20d2367feb5f6948c4b1f7ce1191e33c4",
+      "expected_size_note": "8,192,212-byte ZIP verified 2026-07-31; UCI interface labels the main archive 7.6 MB",
+      "canonical_coverage": [],
+      "reference_only_fields": ["pm25_ug_m3", "pm10_ug_m3", "so2_ug_m3", "no2_ug_m3", "co_ug_m3", "o3_ug_m3", "temperature_c", "pressure_hpa", "dew_point_c", "rain_mm", "wind_direction", "wind_speed_m_s"],
+      "explicitly_missing": ["bme_gas_ohm", "co_ppm", "no2_raw_mv", "no2_ratio", "co2_ppm", "battery_voltage", "current_ma", "power_mw"],
+      "quality_notes": [
+        "Hourly reference monitoring and meteorological data from 12 Beijing sites, not low-cost project sensor output.",
+        "Missing values are denoted NA and must remain missing unless a separately labelled sensitivity analysis is run.",
+        "Keep station identity and evaluate every station passing a preregistered coverage gate.",
+        "Do not merge stations into one fabricated device timeline."
+      ]
+    },
+    {
+      "id": "intel_lab_sensor_data",
+      "name": "Intel Berkeley Research Lab Sensor Data",
+      "lane": "multi_device_indoor_sensor_network",
+      "landing_url": "https://db.csail.mit.edu/labdata/labdata.html",
+      "download_url": "https://db.csail.mit.edu/labdata/data.txt.gz",
+      "download_filename": "intel_lab_sensor_data.txt.gz",
+      "license": "Permission granted for use or reproduction with acknowledgement; source provides no warranty",
+      "download_mode": "script_allowed",
+      "sha256": "d99288c8f406ca6604d359ceaa0d8adfffa79e7095061a1e27dc4399f48c7225",
+      "expected_size_note": "34,422,518-byte gzip verified 2026-07-31; official page states about 150 MB uncompressed",
+      "canonical_coverage": [],
+      "reference_only_fields": ["temperature_c", "humidity_pct", "light_lux", "voltage_v"],
+      "explicitly_missing": ["pressure_hpa", "bme_gas_ohm", "co_ppm", "no2_raw_mv", "no2_ratio", "o3_ppm", "co2_ppm", "pm1_ug_m3", "pm25_ug_m3", "pm10_ug_m3", "current_ma", "power_mw"],
+      "quality_notes": [
+        "Approximately 2.3 million readings from 54 Mica2Dot nodes collected in a research lab in 2004.",
+        "Some mote streams are missing or truncated; inclusion must use a coverage rule fixed before model evaluation.",
+        "Voltage is strongly temperature-correlated and is not evidence of project battery health.",
+        "Any five-minute aggregation must be labelled deterministic resampling; raw readings remain immutable."
+      ]
+    },
+    {
       "id": "power_proxy_external",
       "name": "External battery/power proxy dataset",
       "lane": "power_proxy_research",
