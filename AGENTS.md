@@ -168,6 +168,10 @@ Untuk setiap task audit/implementasi/bugfix/review/model/pipeline di repo ini:
 - Jangan print secret, token, password, `.env`, atau endpoint privat.
 - Jangan install dependency berat, menjalankan training panjang, restart service, commit, atau push tanpa izin.
 - Jangan menyatakan hardware lulus hanya karena build host berhasil.
+- Dari GPT/DevSpace, jalankan laptop CUDA hanya lewat
+  `python3 scripts/remote/devspace_laptop_exec.py probe` dan subcommand `run`; jangan
+  memakai SSH raw ke IP laptop. Entrypoint ini memetakan cwd ke
+  `C:\vscode\IIOT-Project\iiot-ai-sensor-gateway` dan menolak shell/path di luar scope.
 
 ## Verifikasi
 

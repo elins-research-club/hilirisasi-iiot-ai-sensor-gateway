@@ -31,7 +31,56 @@ powershell -ExecutionPolicy Bypass -File .\scripts\remote\fix_syncthing_ignored_
 
 Helper ini fail-closed bila folder ID/path tidak cocok. Ia hanya menulis `.stignore` untuk cache/build regenerable dan memanggil API Syncthing lokal untuk rescan; tidak menghapus source, dataset, model, archive, atau `.stversions`.
 
-## Opsi B (penuh): OpenSSH Server di Windows + Tailscale
+## Opsi B (fallback): Job Queue via Syncthing
+
+Gunakan bila laptop online tetapi reverse SSH sedang tidak tersedia. Laptop menjalankan
+`laptop_agent.ps1`, lalu VPS menulis job ke folder sync. Jalur ini lebih lambat dan tidak
+interaktif, tetapi tetap berguna sebagai fallback.
+
+```bash
+python3 scripts/remote/enqueue_job.py --command "py -3.13 scripts\laptop_bakeoff_runner.py --device cuda --lanes fidas,sim --epochs 80 --batch-size 256"
+```
+
+## Opsi C (canonical untuk GPT/DevSpace): scoped SSH runner
+
+OpenSSH Server, Tailscale-only firewall, admin authorized key, dan alias
+`grey-laptop` sudah diprovisi. GPT tidak boleh menebak IP atau identity file; panggil
+entrypoint project berikut dari workspace DevSpace:
+
+```bash
+python3 scripts/remote/devspace_laptop_exec.py probe
+```
+
+Probe memverifikasi host/user, repo sync Windows, GPU, Python, PyTorch CUDA, branch, dan
+dirty count. Contoh eksekusi aktual di RTX 4050:
+
+```bash
+python3 scripts/remote/devspace_laptop_exec.py run \
+  --repo iiot-ai-sensor-gateway -- \
+  py -3.13 scripts\\probe_cuda.py
+```
+
+Dry-run orchestration canonical:
+
+```bash
+python3 scripts/remote/devspace_laptop_exec.py run \
+  --repo iiot-ai-sensor-gateway -- \
+  py -3.13 scripts\\laptop_bakeoff_runner.py \
+    --device cuda --dry-run --lanes sim --seeds 42 \
+    --skip-public-prepare --skip-lstm
+```
+
+Runner menggunakan argument array tanpa shell interpolation. Executable dibatasi ke
+Python/pytest dan query `nvidia-smi`; `python -c`, PowerShell/cmd bebas, executable/path
+absolut, traversal keluar repo, dan opsi mutating `nvidia-smi` ditolak. Ini guardrail agar
+GPT menjalankan entrypoint project yang sudah direview, bukan sandbox terhadap perilaku
+internal script Python tersebut. Output/artifact yang ditulis di repo Windows akan kembali
+ke VPS melalui Syncthing.
+
+Untuk training panjang di DevSpace, gunakan `exec_command`; jika mendapat `sessionId`,
+poll dengan `write_stdin` daripada mengulang command.
+
+## Provisioning OpenSSH Windows (sudah selesai; referensi recovery)
 
 1. Laptop online di Tailscale (`grey`).
 2. Di PowerShell Admin:
@@ -43,22 +92,22 @@ Set-Service -Name sshd -StartupType Automatic
 New-NetFirewallRule -Name "OpenSSH-Server-In-TCP-Tailscale" -DisplayName "OpenSSH Server (Tailscale)" -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -RemoteAddress 100.64.0.0/10
 ```
 
-3. Copy public key VPS ke Windows:
+3. Public key dedicated VPS harus ada pada path efektif akun admin:
 
 ```powershell
-# di Windows, buat C:\Users\rangg\.ssh\authorized_keys berisi isi:
-# /home/ubuntu/.ssh/oracle_to_aws_ed25519.pub  (atau generate dedicated key)
+# Akun rangg termasuk Administrators, jadi sshd memakai file ini:
+C:\ProgramData\ssh\administrators_authorized_keys
 ```
 
-4. Dari VPS:
+4. Verifikasi authoritative dari VPS:
 
 ```bash
-ssh -i ~/.ssh/oracle_to_aws_ed25519 rangg@100.85.110.65 "py -3.13 --version"
+ssh -o BatchMode=yes grey-laptop "whoami; hostname"
 ```
 
 Catatan: Tailscale native SSH **tidak support Windows**; butuh OpenSSH Server biasa.
 
 ## Rekomendasi
 
-- **Sekarang:** Opsi A (job queue) — zero firewall drama, jalan lewat Syncthing.
-- **Nanti:** Opsi B bila butuh interactive shell real-time.
+- **GPT/DevSpace:** Opsi C scoped SSH runner.
+- **Fallback saat SSH unavailable:** Opsi A/B job queue via Syncthing.
