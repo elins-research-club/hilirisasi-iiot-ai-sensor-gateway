@@ -33,22 +33,23 @@ class Lane:
     seasonal_period: int
     max_samples_per_split: int = 0
     max_window_records: int = 0
+    artifact_root: Path = ROOT / "models" / "bakeoff"
 
     @property
     def processed_dir(self) -> Path:
-        return ROOT / "data" / "bakeoff" / self.slug / "processed"
+        return self.artifact_root / "_run_data" / self.slug / "processed"
 
     @property
     def dataset_path(self) -> Path:
-        return ROOT / "data" / "bakeoff" / self.slug / "forecast.npz"
+        return self.artifact_root / "_run_data" / self.slug / "forecast.npz"
 
     @property
     def meta_path(self) -> Path:
-        return ROOT / "data" / "bakeoff" / self.slug / "forecast-meta.json"
+        return self.artifact_root / "_run_data" / self.slug / "forecast-meta.json"
 
     @property
     def models_root(self) -> Path:
-        return ROOT / "models" / "bakeoff" / self.slug
+        return self.artifact_root / self.slug
 
 
 def atomic_write_json(path: Path, data: dict[str, Any]) -> None:
@@ -144,11 +145,13 @@ class Runner:
         *,
         python: str,
         state_path: Path,
+        artifact_root: Path,
         force: bool,
         dry_run: bool,
     ) -> None:
         self.python = python
         self.state_path = state_path
+        self.artifact_root = artifact_root
         self.force = force
         self.dry_run = dry_run
         self.state = load_state(state_path)
@@ -275,8 +278,8 @@ def parse_csv_strings(value: str) -> tuple[str, ...]:
 
 
 def prepare_public_data(runner: Runner, args: argparse.Namespace) -> None:
-    downloads = ROOT / "data" / "external" / "downloads"
-    adapted = ROOT / "data" / "external" / "adapted"
+    downloads = runner.artifact_root / "_run_data" / "external" / "downloads"
+    adapted = runner.artifact_root / "_run_data" / "external" / "adapted"
     downloads.mkdir(parents=True, exist_ok=True)
     adapted.mkdir(parents=True, exist_ok=True)
     uci_zip = downloads / "uci_air_quality_360.zip"
@@ -335,7 +338,8 @@ def prepare_public_data(runner: Runner, args: argparse.Namespace) -> None:
         )
 
 
-def lane_definitions() -> dict[str, Lane]:
+def lane_definitions(artifact_root: Path | None = None) -> dict[str, Lane]:
+    artifact_root = artifact_root or ROOT / "models" / "bakeoff"
     return {
         "gary": Lane(
             "gary",
@@ -343,26 +347,29 @@ def lane_definitions() -> dict[str, Lane]:
             ("temperature_c", "humidity_pct", "pressure_hpa"),
             48,
             0,
+            artifact_root=artifact_root,
         ),
         "uci": Lane(
             "uci",
-            ROOT / "data" / "external" / "adapted" / "uci_compact.jsonl",
+            artifact_root / "_run_data" / "external" / "adapted" / "uci_compact.jsonl",
             ("temperature_c", "humidity_pct"),
             48,
             24,
+            artifact_root=artifact_root,
         ),
         "fidas": Lane(
             "fidas",
-            ROOT / "data" / "external" / "adapted" / "fidas_compact.jsonl",
+            artifact_root / "_run_data" / "external" / "adapted" / "fidas_compact.jsonl",
             ("pm25_ug_m3", "pm1_ug_m3", "pm10_ug_m3"),
             12,
             720,
             20000,
             50000,
+            artifact_root=artifact_root,
         ),
         "sim": Lane(
             "sim",
-            ROOT / "data" / "bakeoff" / "sim" / "payloads.jsonl",
+            artifact_root / "_run_data" / "sim" / "payloads.jsonl",
             (
                 "temperature_c",
                 "humidity_pct",
@@ -374,8 +381,118 @@ def lane_definitions() -> dict[str, Lane]:
             ),
             12,
             1440,
+            artifact_root=artifact_root,
         ),
     }
+
+
+def resolve_artifact_root(value: str) -> Path:
+    """Resolve a run-specific artifact directory inside this repository."""
+    relative = Path(value) if value else Path("models") / "bakeoff"
+    if relative.is_absolute():
+        raise SystemExit("--run-dir must be relative to the repository root")
+    if ".." in relative.parts:
+        raise SystemExit("--run-dir cannot contain parent traversal")
+    root = ROOT.resolve()
+    runs_root = root / "models" / "bakeoff_runs"
+    _assert_no_reparse_components(runs_root, root)
+    candidate = root / relative
+    _assert_no_reparse_components(candidate, root)
+    artifact_root = candidate.resolve()
+    try:
+        artifact_root.relative_to(runs_root)
+    except ValueError as exc:
+        raise SystemExit("--run-dir must stay inside models/bakeoff_runs") from exc
+    if artifact_root == runs_root:
+        raise SystemExit("--run-dir must name a child directory under models/bakeoff_runs")
+    return artifact_root
+
+
+def _is_reparse_point(path: Path) -> bool:
+    """Return true for a symlink or Windows junction."""
+    is_junction = getattr(os.path, "isjunction", lambda _path: False)
+    return path.is_symlink() or bool(is_junction(str(path)))
+
+
+def _assert_no_reparse_components(path: Path, root: Path) -> None:
+    """Reject symlink/junction components before resolving a user path."""
+    root = root.resolve()
+    candidate = path.absolute()
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError as exc:
+        raise SystemExit("path must stay inside the repository root") from exc
+    current = root
+    for part in relative.parts:
+        current /= part
+        if _is_reparse_point(current):
+            raise SystemExit(f"path component cannot be a symlink/junction: {current}")
+
+
+def _assert_no_reparse_tree(root: Path) -> None:
+    """Reject existing symlinks/junctions anywhere in a resumable run."""
+    if not root.exists():
+        return
+    for current, directories, files in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        for name in [*directories, *files]:
+            candidate = current_path / name
+            if _is_reparse_point(candidate):
+                raise SystemExit(
+                    f"run directory contains a symlink/junction; refusing resume: {candidate}"
+                )
+
+
+def create_new_run_dir() -> Path:
+    """Atomically create a fresh timestamped run directory inside the repo."""
+    parent = ROOT / "models" / "bakeoff_runs"
+    _assert_no_reparse_components(parent, ROOT)
+    parent.mkdir(parents=True, exist_ok=True)
+    _assert_no_reparse_components(parent, ROOT)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    for suffix in ("", "_01", "_02", "_03", "_04", "_05"):
+        candidate = parent / f"{stamp}{suffix}"
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            continue
+        return candidate
+    raise SystemExit(f"could not allocate a unique run directory under {parent}")
+
+
+def ensure_artifact_root_safe(artifact_root: Path, *, resume: bool) -> None:
+    """Prevent accidental reuse of the legacy or a non-empty run directory."""
+    # ``resolve_artifact_root`` already enforces this for the real CLI path.
+    # Keep this helper usable with isolated temporary roots in unit tests.
+    try:
+        artifact_root.absolute().relative_to(ROOT.resolve())
+    except ValueError:
+        pass
+    else:
+        _assert_no_reparse_components(artifact_root, ROOT)
+    legacy_root = (ROOT / "models" / "bakeoff").resolve()
+    if artifact_root.resolve() == legacy_root:
+        raise SystemExit(
+            "models/bakeoff is the protected legacy run; use models/bakeoff_runs/<name>"
+        )
+    if artifact_root.exists() and any(artifact_root.iterdir()) and not resume:
+        raise SystemExit(
+            f"run directory is non-empty: {artifact_root}; "
+            "choose a new --run-dir or pass --resume explicitly"
+        )
+    _assert_no_reparse_tree(artifact_root)
+
+
+def resolve_state_path(value: str, artifact_root: Path) -> Path:
+    """Keep custom state files inside the selected run directory."""
+    _assert_no_reparse_tree(artifact_root)
+    state = (ROOT / value).resolve() if value else artifact_root / "state" / "RUN_STATE.json"
+    _assert_no_reparse_components(state, artifact_root)
+    try:
+        state.relative_to(artifact_root.resolve())
+    except ValueError as exc:
+        raise SystemExit("--state must stay inside the selected --run-dir") from exc
+    return state
 
 
 def prepare_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> bool:
@@ -538,7 +655,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-bytes", type=int, default=100 * 1024 * 1024)
     parser.add_argument("--sim-count", type=int, default=5000)
     parser.add_argument("--sim-nodes", type=int, default=3)
-    parser.add_argument("--state", default="models/bakeoff/state/RUN_STATE.json")
+    parser.add_argument(
+        "--run-dir",
+        default="",
+        help="optional repository-relative artifact directory; omitted = fresh timestamped run",
+    )
+    parser.add_argument(
+        "--state",
+        default="",
+        help="optional state path; defaults to <run-dir>/state/RUN_STATE.json",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="allow resuming a non-empty --run-dir explicitly",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
@@ -566,14 +697,19 @@ def validate_args(args: argparse.Namespace) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     validate_args(args)
+    if args.resume and not args.run_dir:
+        raise SystemExit("--resume requires an explicit --run-dir")
     os.chdir(ROOT)
-    lane_map = lane_definitions()
+    artifact_root = create_new_run_dir() if not args.run_dir else resolve_artifact_root(args.run_dir)
+    ensure_artifact_root_safe(artifact_root, resume=args.resume)
+    lane_map = lane_definitions(artifact_root)
     unknown = sorted(set(args.lanes).difference(lane_map))
     if unknown:
         raise SystemExit(f"unknown lanes: {unknown}")
     runner = Runner(
         python=args.python,
-        state_path=ROOT / args.state,
+        state_path=resolve_state_path(args.state, artifact_root),
+        artifact_root=artifact_root,
         force=args.force,
         dry_run=args.dry_run,
     )
@@ -586,11 +722,16 @@ def main(argv: list[str] | None = None) -> int:
             train_lane(runner, lane, args)
     runner.run_step(
         "summary",
-        ["scripts/summarize_bakeoff.py", "--root", "models/bakeoff", "--output", "models/bakeoff/FULL_BAKEOFF_SUMMARY.json"],
-        [ROOT / "models" / "bakeoff" / "FULL_BAKEOFF_SUMMARY.json"],
+        [
+            "scripts/summarize_bakeoff.py",
+            "--root", str(artifact_root),
+            "--output", str(artifact_root / "FULL_BAKEOFF_SUMMARY.json"),
+        ],
+        [artifact_root / "FULL_BAKEOFF_SUMMARY.json"],
     )
     print("Bake-off orchestration complete. Results remain EXPERIMENTAL.")
     print("State:", runner.state_path)
+    print("Artifacts:", artifact_root)
     return 0
 
 

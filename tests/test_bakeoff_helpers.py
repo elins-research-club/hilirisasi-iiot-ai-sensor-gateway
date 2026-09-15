@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -83,7 +84,11 @@ class BakeoffHelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state_path = Path(tmp) / "state.json"
             runner = runner_module.Runner(
-                python="python3", state_path=state_path, force=False, dry_run=True
+                python="python3",
+                state_path=state_path,
+                artifact_root=Path(tmp) / "artifacts",
+                force=False,
+                dry_run=True,
             )
             runner.run_step("fixture", ["--version"], [])
             state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -102,6 +107,43 @@ class BakeoffHelperTests(unittest.TestCase):
         self.assertEqual(lanes["uci"].window_size, 48)
         self.assertEqual(lanes["fidas"].window_size, 12)
         self.assertEqual(lanes["sim"].window_size, 12)
+
+    def test_new_run_artifacts_use_isolated_root_and_non_empty_root_is_blocked(self):
+        runner_module = _load_script("laptop_bakeoff_runner.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact_root = Path(tmp) / "models" / "bakeoff_runs" / "run_1"
+            lanes = runner_module.lane_definitions(artifact_root)
+            self.assertEqual(lanes["gary"].models_root, artifact_root / "gary")
+            artifact_root.mkdir(parents=True)
+            (artifact_root / "marker").write_text("existing", encoding="utf-8")
+            with self.assertRaises(SystemExit):
+                runner_module.ensure_artifact_root_safe(artifact_root, resume=False)
+            runner_module.ensure_artifact_root_safe(artifact_root, resume=True)
+
+    def test_run_path_guards_block_traversal_reparse_points_and_implicit_resume(self):
+        runner_module = _load_script("laptop_bakeoff_runner.py")
+        for value in ("models/bakeoff", "models/bakeoff_runs", "../models/bakeoff_runs/run"):
+            with self.assertRaises(SystemExit):
+                runner_module.resolve_artifact_root(value)
+
+        original_root = runner_module.ROOT
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_root = Path(tmp) / "repo"
+            runs_root = fake_root / "models" / "bakeoff_runs"
+            runs_root.mkdir(parents=True)
+            try:
+                os.symlink(tmp, runs_root / "outside", target_is_directory=True)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlink fixture unavailable: {exc}")
+            runner_module.ROOT = fake_root
+            try:
+                with self.assertRaises(SystemExit):
+                    runner_module.resolve_artifact_root("models/bakeoff_runs/outside")
+            finally:
+                runner_module.ROOT = original_root
+
+        with self.assertRaises(SystemExit):
+            runner_module.main(["--resume", "--dry-run", "--lanes", "sim"])
 
     def test_remote_enqueue_default_workdir_is_resolved_by_windows_agent(self):
         script = ROOT / "scripts" / "remote" / "enqueue_job.py"

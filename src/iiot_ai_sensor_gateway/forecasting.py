@@ -628,6 +628,16 @@ def _load_normalization_ranges(data: Any) -> dict[str, tuple[float, float]]:
     return {key: (float(value[0]), float(value[1])) for key, value in raw.items()}
 
 
+def _resource_module():
+    """Best-effort resource.getrusage (Unix-only; None elsewhere)."""
+    try:
+        import resource as _res
+
+        return _res
+    except ImportError:
+        return None
+
+
 def train_lstm_forecast(
     dataset_npz: str | Path = "data/modeling/lstm_forecast_dataset.npz",
     output_dir: str | Path = "models/lstm_forecast/latest",
@@ -650,6 +660,9 @@ def train_lstm_forecast(
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    import time as _time
+
+    _train_started = _time.perf_counter()
     if weight_decay < 0 or grad_clip_norm < 0:
         raise ValueError("weight_decay and grad_clip_norm must be non-negative")
 
@@ -753,7 +766,9 @@ def train_lstm_forecast(
         "created_at": created_at,
         "horizon_steps": int(data["horizon_steps"][0]) if "horizon_steps" in data else None,
         "resample_interval_sec": int(data["resample_interval_sec"][0]) if "resample_interval_sec" in data else 60,
-        "cadence_seconds": float(data["cadence_seconds"][0]) if "cadence_seconds" in data else float(data["resample_interval_sec"][0]),
+        "cadence_seconds": float(data["cadence_seconds"][0]) if "cadence_seconds" in data else float(
+            data["resample_interval_sec"][0] if "resample_interval_sec" in data else 60
+        ),
         "horizon_duration_seconds": float(data["horizon_duration_seconds"][0]) if "horizon_duration_seconds" in data else None,
         "window_size": int(data["window_size"][0]) if "window_size" in data else int(X_train.shape[1]),
         "feature_names": list(feature_names),
@@ -792,6 +807,17 @@ def train_lstm_forecast(
         "input_shape": list(X_train.shape[1:]),
         "target_shape": list(y_train.shape[1:]),
         "history": history,
+        "param_count": sum(int(p.numel()) for p in model.parameters()),
+        "resource_measurement": {
+            "hardware_label": "current_host",
+            "training_wall_ms": (_time.perf_counter() - _train_started) * 1000.0,
+            "process_max_rss_kib": (
+                int(_resource_module().getrusage(_resource_module().RUSAGE_SELF).ru_maxrss)
+                if _resource_module() is not None
+                else None
+            ),
+            "raspberry_pi_claim": None,
+        },
         **model_metadata,
     }
     (out_dir / "training.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
@@ -945,7 +971,9 @@ def evaluate_lstm_forecast(
     stored_ranges = _load_normalization_ranges(data)
     ranges = _merged_ranges(normalization_ranges or stored_ranges)
     horizon_steps = int(data["horizon_steps"][0]) if "horizon_steps" in data else 1
-    cadence_seconds = float(data["cadence_seconds"][0]) if "cadence_seconds" in data else float(data["resample_interval_sec"][0])
+    cadence_seconds = float(data["cadence_seconds"][0]) if "cadence_seconds" in data else float(
+        data["resample_interval_sec"][0] if "resample_interval_sec" in data else 60
+    )
     horizon_duration_seconds = float(data["horizon_duration_seconds"][0]) if "horizon_duration_seconds" in data else horizon_steps * cadence_seconds
     result: dict[str, Any] = {
         "model_path": str(model_path),

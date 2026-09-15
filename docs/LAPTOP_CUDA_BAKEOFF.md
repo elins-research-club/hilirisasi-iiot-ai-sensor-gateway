@@ -122,7 +122,7 @@ Dry-run menulis state plan tanpa training/download/artifact besar.
 State:
 
 ```text
-models/bakeoff/state/RUN_STATE.json
+models/bakeoff_runs/<timestamp>/state/RUN_STATE.json
 ```
 
 Setiap step menyimpan:
@@ -142,10 +142,32 @@ Step di-skip hanya bila:
 
 Gunakan `--force` hanya bila sengaja mengulang. Jangan memakai resume script manual lama; wrappers hanya memanggil runner Python canonical.
 
+## Run Baru Tanpa Menimpa Run Lama
+
+Untuk membuat run baru tetap di dalam repo tetapi terpisah dari artifact lama,
+runner otomatis membuat folder timestamp baru di `models/bakeoff_runs/` bila
+`--run-dir` tidak diberikan. Runner menolak folder yang sudah berisi file
+kecuali `--resume` ditulis eksplisit.
+
+PowerShell dari terminal VSCode:
+
+```powershell
+cd C:\vscode\IIOT-Project\iiot-ai-sensor-gateway
+py -3.13 scripts\laptop_bakeoff_runner.py --device cuda --seeds 42,43,44 --lanes gary,uci,fidas,sim
+```
+
+Hasil run baru dicetak oleh runner dan ada di `models/bakeoff_runs/<timestamp>/`;
+run lama di `models/bakeoff/` tidak disentuh. Jika proses terhenti, ulangi
+dengan path run yang tercetak dan tambahan `--resume`, tanpa `--force`:
+
+```powershell
+py -3.13 scripts\laptop_bakeoff_runner.py --run-dir models\bakeoff_runs\20260914 --resume --device cuda --seeds 42,43,44 --lanes gary,uci,fidas,sim
+```
+
 ## Per-Seed Layout
 
 ```text
-models/bakeoff/<lane>/<model>/seed_<seed>/
+models/bakeoff_runs/<timestamp>/<lane>/<model>/seed_<seed>/
   model.pt
   training.json
   metrics.json
@@ -154,7 +176,7 @@ models/bakeoff/<lane>/<model>/seed_<seed>/
 Summary:
 
 ```text
-models/bakeoff/FULL_BAKEOFF_SUMMARY.json
+models/bakeoff_runs/<timestamp>/FULL_BAKEOFF_SUMMARY.json
 ```
 
 Summary v2 menyimpan per-run evidence dan aggregate mean/std/min/max per model/lane. Model dengan baseline win tetapi data-quality gate gagal tidak dihitung promotion pass.
@@ -235,10 +257,10 @@ Periksa:
 Kirim/sinkronkan:
 
 ```text
-models/bakeoff/FULL_BAKEOFF_SUMMARY.json
-models/bakeoff/<lane>/<model>/seed_*/metrics.json
-models/bakeoff/<lane>/<model>/seed_*/training.json
-data/bakeoff/<lane>/forecast-meta.json
+models/bakeoff_runs/<timestamp>/FULL_BAKEOFF_SUMMARY.json
+models/bakeoff_runs/<timestamp>/<lane>/<model>/seed_*/metrics.json
+models/bakeoff_runs/<timestamp>/<lane>/<model>/seed_*/training.json
+models/bakeoff_runs/<timestamp>/_run_data/<lane>/forecast-meta.json
 ```
 
 Tidak perlu mengirim `model.pt` bila hanya review methodology/metrics. Jangan commit blob dataset/model.
