@@ -146,6 +146,16 @@ class StreamingAndDecisionTests(unittest.TestCase):
         self.assertTrue(second["warmup_complete"])
         self.assertTrue(second["is_anomaly"])
         self.assertTrue(second["drift_detected"])
+        self.assertEqual(second["timestamp_basis"], "rfc3339")
+        self.assertIn("receive_timestamp", second)
+
+        uptime = pipeline.process(
+            {"x": 0.2}, node_timestamp_ms=1234, timestamp_basis="uptime_ms"
+        )
+        self.assertEqual(uptime["timestamp_basis"], "gateway_receive")
+        self.assertEqual(uptime["node_timestamp_ms"], 1234)
+        self.assertEqual(uptime["node_timestamp_basis"], "uptime_ms")
+        self.assertIn("receive_timestamp", uptime)
 
     def test_streaming_pipeline_rejects_unscaled_features(self):
         pipeline = StreamingDetectionPipeline(FakeAnomaly(), {"x": FakeDrift()})

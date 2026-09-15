@@ -138,7 +138,14 @@ class StreamingDetectionPipeline:
             normalized[str(name)] = number
         return normalized
 
-    def process(self, features: dict[str, Any], *, timestamp: str | None = None) -> dict[str, Any]:
+    def process(
+        self,
+        features: dict[str, Any],
+        *,
+        timestamp: str | None = None,
+        node_timestamp_ms: float | int | None = None,
+        timestamp_basis: str | None = None,
+    ) -> dict[str, Any]:
         values = self._validate_features(features)
         raw_score = float(self.anomaly_model.score_one(values))
         if not math.isfinite(raw_score):
@@ -157,9 +164,15 @@ class StreamingDetectionPipeline:
                 drift_features.append(name)
         warmed_up = self.seen >= self.config.warmup_samples
         is_anomaly = warmed_up and anomaly_score >= self.config.anomaly_threshold
-        return {
+        receive_timestamp = datetime.now(tz=UTC).isoformat()
+        result = {
             "schema": STREAM_SCHEMA,
-            "timestamp": timestamp or datetime.now(tz=UTC).isoformat(),
+            # ``timestamp`` is an event timestamp only when the input supplied
+            # one. For uptime-only replays it is the gateway processing time;
+            # the original node clock is carried separately below.
+            "timestamp": timestamp or receive_timestamp,
+            "receive_timestamp": receive_timestamp,
+            "timestamp_basis": "rfc3339" if timestamp else "gateway_receive",
             "sample_index": self.seen,
             "warmup_complete": warmed_up,
             "anomaly_score": anomaly_score,
@@ -170,6 +183,10 @@ class StreamingDetectionPipeline:
             if is_anomaly
             else ("warmup" if not warmed_up else ("drift" if drift_features else "normal")),
         }
+        if node_timestamp_ms is not None:
+            result["node_timestamp_ms"] = node_timestamp_ms
+            result["node_timestamp_basis"] = timestamp_basis or "uptime_ms"
+        return result
 
 
 def build_native_pipeline(
@@ -285,7 +302,12 @@ def run_streaming_detection(
                 record = json.loads(line)
                 feature_source = record.get("features", record.get("values", record))
                 selected = {name: feature_source[name] for name in feature_names}
-                result = pipeline.process(selected, timestamp=record.get("timestamp"))
+                result = pipeline.process(
+                    selected,
+                    timestamp=record.get("timestamp"),
+                    node_timestamp_ms=record.get("node_timestamp_ms"),
+                    timestamp_basis=record.get("timestamp_basis"),
+                )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 rejected += 1
                 target.write(

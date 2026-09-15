@@ -17,7 +17,7 @@
       "additionalProperties": false,
       "required": ["compact_version", "boot_id", "sequence", "node_timestamp", "receive_timestamp", "time_quality", "transport", "radio", "sensor_status", "flags"],
       "properties": {
-        "compact_version": {"type": "integer", "enum": [1, 2]},
+        "compact_version": {"type": "integer", "enum": [1, 2, 3]},
         "boot_id": {"type": "string", "minLength": 1},
         "sequence": {"type": "integer", "minimum": 0},
         "node_timestamp": {"type": ["number", "string", "null"]},

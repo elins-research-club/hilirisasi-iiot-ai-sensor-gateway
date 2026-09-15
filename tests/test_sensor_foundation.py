@@ -138,6 +138,43 @@ class ContractAndTimePolicyTests(unittest.TestCase):
         jsonschema.Draft202012Validator(event_schema).validate(event)
         jsonschema.Draft202012Validator(status_schema).validate(status)
 
+        compact_v3 = {
+            "v": 3,
+            "gw": "gw-1",
+            "n": "node-1",
+            "r": "room-1",
+            "ts": "2026-09-10T06:30:00+00:00",
+            "tb": "rfc3339",
+            "seq": 2,
+            "bid": "boot-v3",
+            "pp": "hardware_only",
+            "fw": "sensor-fw-3.0.0",
+            "cfg": "board-a1",
+            "cal": "factory-unverified",
+            "hs": "partial",
+            "f": ["co2_warmup"],
+            "ok": {
+                "bme688": "ok",
+                "sen0466": "ok",
+                "sen0574": "ok",
+                "sen0321": "ok",
+                "mhz19": "warming",
+                "pms7003t": "ok",
+                "ina226": "ok",
+            },
+            "s": {"tc": 28.0, "h": 60.0, "co2": None},
+        }
+        compact_v3_schema = json.loads(
+            (ROOT / "schemas/compact_sensor.v3.schema.json").read_text()
+        )
+        jsonschema.Draft202012Validator(compact_v3_schema).validate(compact_v3)
+        v3_reading = self.parser.parse(
+            compact_v3, receive_timestamp="2026-09-10T06:30:01Z"
+        )
+        v3_event = build_sensor_ai_event(v3_reading)
+        self.assertEqual(v3_event["source"]["compact_version"], 3)
+        jsonschema.Draft202012Validator(event_schema).validate(v3_event)
+
 
 class SerialSourceTests(unittest.TestCase):
     class FakeConnection:
