@@ -122,7 +122,7 @@ Total compliant dengan scope sensor node: **39 model terlatih + dievaluasi + di-
 
 ## 6. Aset & Artefak
 
-### Di Pi 5 (`/home/iiot/iiot-ai-sensor-gateway`)
+### Di Pi 5 (`~/iiot-ai-sensor-gateway`)
 - `.venv/` — venv terpisah (tidak menyentuh venv kamera `/opt/yolo-vision-gateway/.venv`)
 - `models/pi5/` — 24 model hardprog (training.json + eval_results + benchmark.json)
 - `models/pi5_bakeoff/` — 15 model bakeoff
