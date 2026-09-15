@@ -96,6 +96,32 @@ class BakeoffHelperTests(unittest.TestCase):
             self.assertEqual(state["steps"]["fixture"]["status"], "dry_run")
             self.assertEqual(len(state["steps"]["fixture"]["fingerprint"]), 64)
 
+    def test_runner_reexecutes_when_declared_input_changes(self):
+        runner_module = _load_script("laptop_bakeoff_runner.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_path = tmp_path / "state.json"
+            input_path = tmp_path / "input.txt"
+            output_path = tmp_path / "output.txt"
+            input_path.write_text("first", encoding="utf-8")
+            runner = runner_module.Runner(
+                python=sys.executable,
+                state_path=state_path,
+                artifact_root=tmp_path / "artifacts",
+                force=False,
+                dry_run=False,
+            )
+            command = [
+                "-c",
+                f"from pathlib import Path; Path({str(output_path)!r}).write_text(Path({str(input_path)!r}).read_text())",
+            ]
+            runner.run_step("fixture", command, [output_path], input_paths=[input_path])
+            first_fingerprint = runner.state["steps"]["fixture"]["fingerprint"]
+            input_path.write_text("second", encoding="utf-8")
+            runner.run_step("fixture", command, [output_path], input_paths=[input_path])
+            self.assertEqual(output_path.read_text(encoding="utf-8"), "second")
+            self.assertNotEqual(first_fingerprint, runner.state["steps"]["fixture"]["fingerprint"])
+
     def test_outputs_ready_allows_probe_only_steps(self):
         runner_module = _load_script("laptop_bakeoff_runner.py")
         self.assertTrue(runner_module.outputs_ready([]))
@@ -232,6 +258,32 @@ class BakeoffHelperTests(unittest.TestCase):
             self.assertAlmostEqual(aggregate["skill"]["mean"], 0.2)
             self.assertFalse(result["lanes"]["lane"]["runs"]["fits"]["aggregate_included"])
             self.assertTrue(result["lanes"]["lane"]["runs"]["fits/seed_42"]["aggregate_included"])
+
+    def test_summary_excludes_runner_preparation_directory(self):
+        summary = _load_script("summarize_bakeoff.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metrics_path = root / "_run_data" / "sim" / "fits" / "metrics.json"
+            metrics_path.parent.mkdir(parents=True, exist_ok=True)
+            metrics_path.write_text(
+                json.dumps(
+                    {
+                        "model_readiness": "PROMISING",
+                        "baseline_gate": {
+                            "passed": True,
+                            "baseline_passed": True,
+                            "data_quality_passed": True,
+                            "rmse_skill_score": 0.1,
+                            "model_rmse": 0.2,
+                            "per_target_wins": 1,
+                            "effective_target_count": 1,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = summary.build_summary(root)
+            self.assertNotIn("_run_data", result["lanes"])
 
     def test_summary_reads_lstm_metrics_schema(self):
         summary = _load_script("summarize_bakeoff.py")

@@ -121,9 +121,37 @@ def source_fingerprint() -> str:
     return digest.hexdigest()
 
 
-def command_fingerprint(command: list[str], code_fingerprint: str) -> str:
+def input_fingerprint(paths: list[Path] | tuple[Path, ...]) -> str:
+    """Hash declared step inputs so resume cannot reuse stale outputs.
+
+    Missing inputs are included in the digest too: a file appearing at the same
+    path after a failed/partial run must invalidate the previous step state.
+    """
+    digest = hashlib.sha256()
+    for path in sorted((Path(item) for item in paths), key=lambda item: str(item)):
+        digest.update(str(path).encode("utf-8"))
+        digest.update(b"\0")
+        if not path.is_file():
+            digest.update(b"<missing-or-not-a-file>\0")
+            continue
+        with path.open("rb") as file:
+            while chunk := file.read(1024 * 1024):
+                digest.update(chunk)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def command_fingerprint(
+    command: list[str],
+    code_fingerprint: str,
+    input_digest: str = "",
+) -> str:
     payload = json.dumps(
-        {"command": command, "source_fingerprint": code_fingerprint},
+        {
+            "command": command,
+            "source_fingerprint": code_fingerprint,
+            "input_fingerprint": input_digest,
+        },
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -164,9 +192,20 @@ class Runner:
         self.state["source_fingerprint"] = self.code_fingerprint
         atomic_write_json(self.state_path, self.state)
 
-    def run_step(self, key: str, args: list[str], outputs: list[Path]) -> None:
+    def run_step(
+        self,
+        key: str,
+        args: list[str],
+        outputs: list[Path],
+        *,
+        input_paths: list[Path] | tuple[Path, ...] = (),
+    ) -> None:
         command = [self.python, *args]
-        fingerprint = command_fingerprint(command, self.code_fingerprint)
+        fingerprint = command_fingerprint(
+            command,
+            self.code_fingerprint,
+            input_fingerprint(input_paths),
+        )
         previous = self.state["steps"].get(key, {})
         if (
             not self.force
@@ -317,11 +356,13 @@ def prepare_public_data(runner: Runner, args: argparse.Namespace) -> None:
             "adapt/uci",
             ["run_gateway.py", "adapt-uci-air-quality", "--input-csv", str(uci_csv), "--output", str(uci_jsonl)],
             [uci_jsonl],
+            input_paths=[uci_csv],
         )
         runner.run_step(
             "compact/uci",
             ["scripts/dataset_record_to_compact.py", "--input", str(uci_jsonl), "--output", str(uci_compact), "--gateway-id", "uci_gateway"],
             [uci_compact],
+            input_paths=[uci_jsonl],
         )
     if fidas_csv.exists():
         fidas_jsonl = adapted / "fidas.jsonl"
@@ -330,11 +371,13 @@ def prepare_public_data(runner: Runner, args: argparse.Namespace) -> None:
             "adapt/fidas",
             ["run_gateway.py", "adapt-zenodo-pm-reference", "--input-csv", str(fidas_csv), "--output", str(fidas_jsonl)],
             [fidas_jsonl],
+            input_paths=[fidas_csv],
         )
         runner.run_step(
             "compact/fidas",
             ["scripts/dataset_record_to_compact.py", "--input", str(fidas_jsonl), "--output", str(fidas_compact), "--gateway-id", "fidas_gateway", "--include-reference-as-sensor"],
             [fidas_compact],
+            input_paths=[fidas_jsonl],
         )
 
 
@@ -524,6 +567,7 @@ def prepare_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> bool:
             lane.processed_dir / "windows.jsonl",
             lane.processed_dir / "normalization_report.json",
         ],
+        input_paths=[lane.payloads],
     )
     runner.run_step(
         f"lane/{lane.slug}/dataset",
@@ -540,6 +584,7 @@ def prepare_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> bool:
             "--max-window-records", str(lane.max_window_records),
         ],
         [lane.dataset_path, lane.meta_path],
+        input_paths=[lane.processed_dir / "windows.jsonl"],
     )
     if runner.dry_run:
         return True
@@ -583,6 +628,7 @@ def train_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> None:
                     ),
                 ],
                 [model, output / "training.json"],
+                input_paths=[lane.dataset_path],
             )
             runner.run_step(
                 f"lane/{lane.slug}/{model_type}/seed_{seed}/evaluate",
@@ -596,6 +642,7 @@ def train_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> None:
                     "--seasonal-period", str(lane.seasonal_period),
                 ],
                 [output / "metrics.json"],
+                input_paths=[lane.dataset_path, model],
             )
         if not args.skip_lstm:
             output = lane.models_root / "lstm_residual" / f"seed_{seed}"
@@ -614,6 +661,7 @@ def train_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> None:
                     "--forecast-strategy", "residual",
                 ],
                 [model, output / "training.json"],
+                input_paths=[lane.dataset_path],
             )
             runner.run_step(
                 f"lane/{lane.slug}/lstm_residual/seed_{seed}/evaluate",
@@ -627,6 +675,7 @@ def train_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> None:
                     "--seasonal-period", str(lane.seasonal_period),
                 ],
                 [output / "metrics.json"],
+                input_paths=[lane.dataset_path, model],
             )
 
 
@@ -728,6 +777,7 @@ def main(argv: list[str] | None = None) -> int:
             "--output", str(artifact_root / "FULL_BAKEOFF_SUMMARY.json"),
         ],
         [artifact_root / "FULL_BAKEOFF_SUMMARY.json"],
+        input_paths=sorted(artifact_root.rglob("metrics.json")),
     )
     print("Bake-off orchestration complete. Results remain EXPERIMENTAL.")
     print("State:", runner.state_path)

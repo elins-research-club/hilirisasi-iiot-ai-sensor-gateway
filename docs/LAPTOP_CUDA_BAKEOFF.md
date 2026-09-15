@@ -130,6 +130,7 @@ Setiap step menyimpan:
 - status;
 - command;
 - source fingerprint;
+- fingerprint isi input yang dideklarasikan step;
 - output list;
 - start/finish/elapsed;
 - error bila gagal.
@@ -137,8 +138,14 @@ Setiap step menyimpan:
 Step di-skip hanya bila:
 
 1. status completed;
-2. command + source fingerprint sama;
+2. command + source + declared-input fingerprint sama;
 3. seluruh required output ada dan non-empty.
+
+Input dataset/adapted payload, forecast windows, dataset NPZ, model checkpoint,
+dan metrics menjadi input eksplisit pada step downstream. Perubahan isi file akan
+membatalkan resume step terkait, sehingga output lama tidak dipakai diam-diam.
+Folder persiapan internal `_run_data/` bukan lane model dan selalu dikecualikan
+dari `summarize_bakeoff.py`.
 
 Gunakan `--force` hanya bila sengaja mengulang. Jangan memakai resume script manual lama; wrappers hanya memanggil runner Python canonical.
 

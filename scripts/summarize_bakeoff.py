@@ -85,7 +85,7 @@ def build_summary(root: Path) -> dict[str, Any]:
         "lanes": {},
     }
     for lane_dir in sorted(root.glob("*")):
-        if not lane_dir.is_dir() or lane_dir.name in {"smoke", "state"}:
+        if not lane_dir.is_dir() or lane_dir.name in {"smoke", "state", "_run_data"}:
             continue
         runs: dict[str, Any] = {}
         grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)

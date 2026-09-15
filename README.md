@@ -263,8 +263,9 @@ Properties:
 - automatic fresh run directory under `models/bakeoff_runs/<timestamp>/`;
 - atomic `models/bakeoff_runs/<timestamp>/state/RUN_STATE.json`;
 - legacy `models/bakeoff/` is protected and is never a new-run target;
-- command + source fingerprint;
-- resume hanya bila output dan fingerprint cocok;
+- command + source + declared-input fingerprint;
+- resume hanya bila output dan seluruh fingerprint cocok; perubahan input akan menjalankan ulang step terkait;
+- `_run_data/` hanya workspace persiapan dan tidak dihitung sebagai lane pada summary;
 - per-seed model directory;
 - exact dataset filename/checksum;
 - data-quality FAIL memblokir training lane;
