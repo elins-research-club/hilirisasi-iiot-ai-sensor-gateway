@@ -260,7 +260,9 @@ py -3.13 scripts\laptop_bakeoff_runner.py --python py --device cuda
 
 Properties:
 
-- atomic `models/bakeoff/state/RUN_STATE.json`;
+- automatic fresh run directory under `models/bakeoff_runs/<timestamp>/`;
+- atomic `models/bakeoff_runs/<timestamp>/state/RUN_STATE.json`;
+- legacy `models/bakeoff/` is protected and is never a new-run target;
 - command + source fingerprint;
 - resume hanya bila output dan fingerprint cocok;
 - per-seed model directory;
@@ -270,6 +272,25 @@ Properties:
 - tidak mengklaim hasil laptop sebagai Raspberry Pi.
 
 Wrappers `.sh`, `.ps1`, dan `.cmd` hanya meneruskan ke runner Python.
+
+## HardProg Offline Capture dan Pi 5 Evidence
+
+Capture CSV HardProg tetap raw dan di-ignore Git di `data/real_offline/`. Tool
+adapter dan builder memisahkan tiga concern:
+
+- `scripts/adapt_hardprog_csv.py`: raw CSV → `compact_sensor.v3` dengan uptime
+  sebagai `tb=uptime_s`; tidak mengarang wall-clock dan tidak mengubah NO₂
+  menjadi ppm;
+- `scripts/build_hardprog_forecast_npz.py`: enam lane node-sensor, split temporal,
+  purge gap = horizon, serta imputation/normalisasi yang fit pada train;
+- `scripts/build_hardprog_stream_input.py` + `normalize_stream_input.py`:
+  mempertahankan `node_timestamp_ms`/`timestamp_basis=uptime_ms`, membuang marker
+  error CO₂ dari feature normalization, lalu detector menambahkan
+  `receive_timestamp` gateway.
+
+ToF/VL53 adalah lane hybrid-camera reference dan tidak dihitung sebagai forecast
+node sensor. Hasil Pi 5 dan batas klaimnya ada di
+`docs/benchmark-raspi5-forecast-2026-08-28.md`; semua model tetap experimental.
 
 ## MQTT Contract
 

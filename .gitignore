@@ -19,6 +19,7 @@ data/raw/
 data/real_raw/
 data/real_canonical/
 data/real_live_logs/
+data/real_offline/
 data/processed/
 data/processed*/
 data/modeling/
