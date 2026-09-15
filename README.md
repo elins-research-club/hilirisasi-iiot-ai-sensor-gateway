@@ -131,12 +131,13 @@ $PY run_gateway.py receive-real-live \
 
 ```bash
 cd firmware/esp32-c6-sensor-node
-/home/ubuntu/.venvs/platformio/bin/pio run -e mock
-/home/ubuntu/.venvs/platformio/bin/pio run -e hardware
-/home/ubuntu/.venvs/platformio/bin/pio run -e hardware-bme68x
+pio run -e mock
+pio run -e hardware
+pio run -e hardware-bme68x
 ```
 
 `hardware-bme68x` fail-fast bila Bosch SensorAPI resmi tidak tersedia. Build hanya membuktikan kompilasi profile, bukan pin/rail/sensor/radio/calibration/flash fisik.
+File `sdkconfig.mock.defaults` dan `sdkconfig.hardware.defaults` adalah input build yang versioned; `sdkconfig.*.generated` tetap artefak lokal dan di-ignore. Karena itu fresh clone tidak bergantung pada sdkconfig generated dari host sebelumnya.
 
 Detail: `firmware/esp32-c6-sensor-node/README.md`.
 
@@ -317,9 +318,9 @@ Firmware:
 
 ```bash
 cd firmware/esp32-c6-sensor-node
-/home/ubuntu/.venvs/platformio/bin/pio run -e mock
-/home/ubuntu/.venvs/platformio/bin/pio run -e hardware
-/home/ubuntu/.venvs/platformio/bin/pio run -e hardware-bme68x
+pio run -e mock
+pio run -e hardware
+pio run -e hardware-bme68x
 ```
 
 ## Evidence Boundary

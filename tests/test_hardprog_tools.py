@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import configparser
 import importlib.util
 import json
 import os
@@ -170,6 +171,30 @@ class BenchmarkHostLabelTests(unittest.TestCase):
                 os.environ.pop("IIOT_HARDWARE_LABEL", None)
             else:
                 os.environ["IIOT_HARDWARE_LABEL"] = old
+
+
+class FirmwareBuildInputTests(unittest.TestCase):
+    def test_platformio_sdkconfig_defaults_exist_for_fresh_clone(self):
+        firmware = ROOT / "firmware" / "esp32-c6-sensor-node"
+        config = configparser.ConfigParser()
+        config.read(firmware / "platformio.ini", encoding="utf-8")
+
+        referenced = set()
+        for section in ("env:mock", "env:hardware"):
+            raw = config[section]["board_build.cmake_extra_args"]
+            marker = "SDKCONFIG_DEFAULTS="
+            self.assertIn(marker, raw)
+            value = raw.split(marker, 1)[1].strip().strip('"')
+            referenced.add(value)
+
+        self.assertEqual(
+            referenced,
+            {"sdkconfig.mock.defaults", "sdkconfig.hardware.defaults"},
+        )
+        for relative in sorted(referenced):
+            path = firmware / relative
+            self.assertTrue(path.is_file(), f"missing PlatformIO build input: {path}")
+            self.assertGreater(path.stat().st_size, 0, f"empty PlatformIO build input: {path}")
 
 
 if __name__ == "__main__":

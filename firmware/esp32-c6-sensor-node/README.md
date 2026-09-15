@@ -56,14 +56,16 @@ File historis `preprocessing.cpp` tetap dipakai build untuk meminimalkan churn, 
 
 ```bash
 cd firmware/esp32-c6-sensor-node
-/home/ubuntu/.venvs/platformio/bin/pio run -e mock
-/home/ubuntu/.venvs/platformio/bin/pio run -e hardware
-/home/ubuntu/.venvs/platformio/bin/pio run -e hardware-bme68x
+pio run -e mock
+pio run -e hardware
+pio run -e hardware-bme68x
 ```
 
 - `mock`: CI/host, 8 MB profile;
 - `hardware`: 16 MB target, BME688 disabled bila dependency tidak enabled;
 - `hardware-bme68x`: fail-fast bila official Bosch `bme68x.h` tidak tersedia.
+
+`sdkconfig.mock.defaults` dan `sdkconfig.hardware.defaults` disimpan di Git karena keduanya direferensikan langsung oleh `platformio.ini`. File `sdkconfig.*.generated` tetap lokal/ignored agar build bersih dapat diregenerasi tanpa membawa state host lama.
 
 Build tidak membuktikan flash chip, pin, PCB, rail, level logic, sensor response, E32, calibration, atau power fisik.
 

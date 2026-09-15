@@ -53,7 +53,9 @@ data/evaluation/
 firmware/**/.pio/
 firmware/**/.vscode/
 firmware/**/sdkconfig*
-!firmware/**/sdkconfig.defaults
+# Keep generated sdkconfig files local, but version the small defaults files
+# referenced by PlatformIO so a fresh clone can reproduce every build profile.
+!firmware/**/sdkconfig*.defaults
 # Official Bosch source is installed locally for the optional BME688 profile.
 # Keep the third-party checkout out of project commits.
 firmware/esp32-c6-sensor-node/lib/BME68x_SensorAPI/
