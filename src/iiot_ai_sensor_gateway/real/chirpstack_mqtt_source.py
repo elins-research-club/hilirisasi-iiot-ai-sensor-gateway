@@ -155,12 +155,21 @@ class ChirpStackMQTTSource:
         while not self._stop.is_set():
             if max_messages and yielded >= max_messages:
                 break
-            try:
-                item = self.queue.get(timeout=poll_timeout_sec)
-            except queue.Empty:
+            item = self.next_message(timeout_sec=poll_timeout_sec)
+            if item is None:
                 continue
             yielded += 1
             yield item
+
+    def next_message(self, *, timeout_sec: float = 1.0) -> MQTTEnvelope | None:
+        if timeout_sec <= 0:
+            raise ValueError("timeout_sec must be > 0")
+        if not self._started:
+            self.start()
+        try:
+            return self.queue.get(timeout=timeout_sec)
+        except queue.Empty:
+            return None
 
     @property
     def connected(self) -> bool:

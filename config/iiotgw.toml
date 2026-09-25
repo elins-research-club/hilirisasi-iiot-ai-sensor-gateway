@@ -1,6 +1,6 @@
 [identity]
-gateway_id = "raspi_gateway_01"
-default_room_id = "room_A"
+gateway_id = "iiotgw"
+default_room_id = "room_unassigned"
 
 [pipeline]
 buffer_max_size = 2048
@@ -13,19 +13,15 @@ node_silent_after_sec = 180
 sequence_gap_warn = true
 
 [contract]
-# Keep true only while replaying compact v1 regression fixtures. New firmware emits v2.
 allow_legacy_v1 = true
 data_topic = "iot/{gateway_id}/data"
 status_topic = "iot/{gateway_id}/status/sensor"
 
 [preprocessing]
 version = "gateway_preprocess.v1"
-# compact v2 already contains node-side smoothing; keep false during migration.
 apply_to_v2 = false
 state_max_entries = 100000
 
-# Filter policy is intentionally per sensor. "none" preserves spikes for the
-# initial raw-first rollout; tune only from real hardware evidence.
 [preprocessing.filters.temperature_c]
 kind = "none"
 
@@ -35,7 +31,7 @@ kind = "none"
 [preprocessing.filters.co_ppm]
 kind = "none"
 
-[preprocessing.filters.pm25_ug_m3]
+[preprocessing.filters.co2_ppm]
 kind = "none"
 
 [receiver]
@@ -44,52 +40,53 @@ serial_idle_sleep_sec = 0.05
 reconnect_initial_sec = 0.5
 reconnect_max_sec = 30.0
 
-# ChirpStack source is additive. Default remains disabled so the historical
-# serial/replay path behaves exactly as before.
 [chirpstack]
-enabled = false
+enabled = true
 host = "127.0.0.1"
 port = 1883
 topic = "application/+/device/+/event/up"
-client_id = "iiot-ai-sensor-shadow"
+client_id = "iiot-ai-sensor-iiotgw"
 keepalive = 30
 queue_max = 4096
 reconnect_min_sec = 1
 reconnect_max_sec = 30
-allow_dev_eui = []
+allow_dev_eui = ["737fa3925c5c2bba", "e02d6ee6c5f39cfd"]
 username_env = "IIOT_CHIRPSTACK_USER"
 password_env = "IIOT_CHIRPSTACK_PASS"
 
 [chirpstack.room_by_dev_eui]
+"737fa3925c5c2bba" = "room_unassigned"
+"e02d6ee6c5f39cfd" = "room_unassigned"
 
 [live_runtime]
+# Promotion order: shadow_ingest -> shadow_ai -> publish_ai.
 mode = "shadow_ingest"
-output_dir = "data/live_runtime"
+output_dir = "/home/iiotgw/.local/state/iiot-ai-sensor-gateway"
 rotate_max_bytes = 10485760
 anomaly_enabled = true
 anomaly_warmup_samples = 64
 anomaly_threshold = 0.7
-config_version = "sensor-live-v1"
+config_version = "iiotgw-live-2026-09-25"
 
 [publisher]
 enabled = false
-host = "127.0.0.1"
+host = "100.95.51.126"
 port = 1883
-client_id = "iiot-ai-sensor-publisher"
+client_id = "iiot-ai-sensor-iiotgw-publisher"
 keepalive = 30
 qos = 1
 publish_timeout_sec = 10.0
 reconnect_min_sec = 1
 reconnect_max_sec = 30
-outbox_path = "data/live_runtime/outbox.sqlite3"
+outbox_path = "/home/iiotgw/.local/state/iiot-ai-sensor-gateway/outbox.sqlite3"
 outbox_max_entries = 10000
 username_env = "IIOT_PUBLISH_USER"
 password_env = "IIOT_PUBLISH_PASS"
 
 [forecast_runtime]
 enabled = false
-manifest_path = ""
-target_node_id = ""
+manifest_path = "deployment/model-manifests/co2_fits_pi5_20260828.json"
+target_node_id = "737fa3925c5c2bba"
 cadence_tolerance_fraction = 0.20
 
 [normalization]
@@ -111,7 +108,6 @@ pm10_ug_m3 = [0.0, 5000.0]
 battery_voltage = [0.0, 60.0]
 current_ma = [-20000.0, 20000.0]
 power_mw = [-1000000.0, 1000000.0]
-# Migration/reference-only fields.
 voc_raw = [0.0, 5000.0]
 bme_gas_raw = [0.0, 50000.0]
 co_raw = [0.0, 1.0]
@@ -133,7 +129,6 @@ pm10_ug_m3 = [0.0, 5000.0]
 battery_voltage = [0.0, 60.0]
 current_ma = [-20000.0, 20000.0]
 power_mw = [-1000000.0, 1000000.0]
-# Migration/reference-only fixture limits; not RAB calibration ranges.
 voc_raw = [0.0, 5000.0]
 bme_gas_raw = [0.0, 5000.0]
 co_raw = [0.0, 0.05]

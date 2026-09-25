@@ -31,6 +31,7 @@ from .forecasting import (
     train_lstm_forecast,
 )
 from .normalization import MinMaxNormalizer
+from .live_runtime import LiveSensorRuntime
 from .edge_forecasting import (
     MODEL_TYPES,
     evaluate_edge_forecast,
@@ -293,6 +294,13 @@ def build_parser() -> argparse.ArgumentParser:
     receiver.add_argument('--idle-sleep-sec', type=_positive_float, default=None)
     receiver.add_argument('--reconnect-initial-sec', type=_positive_float, default=None)
     receiver.add_argument('--reconnect-max-sec', type=_positive_float, default=None)
+    live = sub.add_parser(
+        'run-live-chirpstack',
+        help='run ChirpStack MQTT live sensor pipeline (shadow/publish mode from config)',
+    )
+    live.add_argument('--config', default='config/iiotgw.toml')
+    live.add_argument('--max-messages', type=_nonnegative_int, default=0)
+    live.add_argument('--poll-timeout-sec', type=_positive_float, default=1.0)
     check = sub.add_parser('check-config', help='load config and exit')
     check.add_argument('--config', default='config/default.toml')
     return parser
@@ -650,6 +658,14 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 2
         print(json.dumps(summary.as_dict(), indent=2))
+        return 0
+    if args.cmd == 'run-live-chirpstack':
+        config = load_config(args.config)
+        summary = LiveSensorRuntime(config).run(
+            max_messages=args.max_messages,
+            poll_timeout_sec=args.poll_timeout_sec,
+        )
+        print(json.dumps(summary, indent=2))
         return 0
     if args.cmd == 'check-config':
         load_config(args.config)

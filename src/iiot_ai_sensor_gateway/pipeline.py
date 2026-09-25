@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .buffer import NodeBuffer
 from .config import AppConfig
-from .contracts import WindowSample
+from .contracts import FeatureVector, SensorReading, ValidationResult, WindowSample
 from .features import extract_features
 from .normalization import MinMaxNormalizer
 from .parser import PayloadParser
@@ -37,7 +37,29 @@ class PreModelPipeline:
 
     def process_payload(self, payload: str | bytes | dict) -> list[WindowSample]:
         reading = self.parser.parse(payload)
+        _result, windows = self.process_reading(reading)
+        return windows
+
+    def process_reading(
+        self, reading: SensorReading
+    ) -> tuple[ValidationResult, list[WindowSample]]:
+        """Process an already-adapted reading through the shared gateway core."""
+
+        result, windows, _new_vectors = self.process_reading_detailed(reading)
+        return result, windows
+
+    def process_reading_detailed(
+        self, reading: SensorReading
+    ) -> tuple[ValidationResult, list[WindowSample], list[FeatureVector]]:
+        """Process a reading and return only newly emitted feature vectors.
+
+        This is used by the live model runtime so inference follows the same
+        identity-isolated resampling path as the canonical pre-model pipeline.
+        """
+
         result = self.preprocessor.process(self.validator.validate(reading))
+        if not result.is_valid:
+            return result, [], []
         self.buffer.add(result)
         points = resample(
             self.buffer.items_for(reading),
@@ -49,6 +71,7 @@ class PreModelPipeline:
             if point.valid_ratio >= self.config.pipeline.min_valid_ratio
         ]
         windows: list[WindowSample] = []
+        new_vectors: list[FeatureVector] = []
         for vector in extract_features(eligible_points):
             key = (
                 vector.gateway_id,
@@ -59,7 +82,8 @@ class PreModelPipeline:
             if key in self.processed_features:
                 continue
             self.processed_features.add(key)
+            new_vectors.append(vector)
             window = self.window_builder.add(self.normalizer.normalize(vector))
             if window is not None:
                 windows.append(window)
-        return windows
+        return result, windows, new_vectors

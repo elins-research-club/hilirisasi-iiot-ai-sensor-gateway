@@ -1,0 +1,24 @@
+{
+  "schema": "iiot.ai_sensor.model_manifest.v1",
+  "id": "co2-fits-pi5-20260828",
+  "model_path": "deployment/models/co2_fits_pi5_20260828.pt",
+  "model_sha256": "def7e300f77a2c06804cf781bd472b9d96092e4ed73415557188da278795755d",
+  "model_type": "fits",
+  "model_version": "fits_edge_v2",
+  "target_names": ["co2_ppm"],
+  "input_length": 16,
+  "expected_cadence_sec": 60.0,
+  "horizon_steps": 5,
+  "horizon_duration_seconds": 300.0,
+  "normalization_ranges": {
+    "co2_ppm": [-1.0, 5000.0]
+  },
+  "readiness": "PROMISING",
+  "deployment_mode": "shadow_only",
+  "source_evidence": "models/pi5/data_co2/fits + docs/benchmark-raspi5-forecast-2026-08-28.md",
+  "limitations": [
+    "trained/evaluated on 2026-08-28 internal HardProg CO2 capture, not current Node 1 field campaign",
+    "prediction must not drive operational alert without current real-data re-evaluation",
+    "runtime must abstain on cadence, feature, manifest, or checksum mismatch"
+  ]
+}
