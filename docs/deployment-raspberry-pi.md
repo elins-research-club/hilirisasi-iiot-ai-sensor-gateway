@@ -2,6 +2,11 @@
 
 Dokumen ini adalah contoh deployment, bukan bukti production readiness.
 
+> **Catatan 25 September 2026:** dokumen ini mempertahankan deployment historis
+> serial/E32 dan **tidak dihapus**. Target live `iiotgw` saat ini menerima
+> node melalui ChirpStack MQTT; runbook paralelnya ada di
+> `deployment-iiotgw-chirpstack.md`.
+
 ## Prasyarat
 
 - Raspberry Pi OS 64-bit;

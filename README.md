@@ -134,6 +134,17 @@ current, source baru `ChirpStackMQTTSource` dan adapter
 `application/+/device/+/event/up` dapat diproses tanpa memalsukan
 `compact_sensor.v3`. Source baru tidak menghapus atau mengubah receiver serial lama.
 
+Current target command:
+
+```bash
+.venv/bin/python run_gateway.py run-live-chirpstack \
+  --config config/iiotgw.toml --max-messages 4
+```
+
+Mode runtime dipromosikan bertahap melalui environment:
+`shadow_ingest -> shadow_ai -> publish_ai`. Runbook lengkap:
+`docs/deployment-iiotgw-chirpstack.md`.
+
 ## Firmware ESP32-C6
 
 ```bash
