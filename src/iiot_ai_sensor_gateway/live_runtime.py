@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from .adapters.chirpstack_live import ChirpStackLiveAdapter
 from .config import AppConfig
+from .contracts import FeatureVector
 from .decision import build_sensor_decision
 from .mqtt_contracts import (
     build_sensor_ai_event_v2,
@@ -186,6 +189,96 @@ class LiveSensorRuntime:
                 ),
             )
         self.summary = LiveRuntimeSummary(started_at=datetime.now(tz=UTC).isoformat())
+        self._rehydrate_ai_state()
+
+    def _rehydrate_ai_state(self) -> None:
+        """Restore bounded AI warm-up state from durable accepted observations.
+
+        Historical observations are used only to rebuild in-memory AI state.
+        They are not re-published and do not re-enter the canonical pipeline.
+        """
+
+        if self.config.live_runtime.mode == "shadow_ingest":
+            return
+        path = Path(self.config.live_runtime.output_dir) / "accepted_events.jsonl"
+        if not path.is_file():
+            return
+
+        recent: deque[dict[str, Any]] = deque(maxlen=4096)
+        try:
+            with path.open(encoding="utf-8") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    canonical = record.get("canonical")
+                    if isinstance(canonical, dict):
+                        recent.append(canonical)
+        except OSError:
+            return
+
+        anomaly_by_node: dict[str, deque[dict[str, Any]]] = defaultdict(
+            lambda: deque(maxlen=self.config.live_runtime.anomaly_warmup_samples)
+        )
+        forecast_buckets: dict[datetime, tuple[str, dict[str, float]]] = {}
+        target_node = (
+            self.forecaster.target_node_id if self.forecaster is not None else ""
+        )
+
+        for canonical in recent:
+            if canonical.get("schema_version") != "chirpstack_live.v1":
+                continue
+            node_id = str(canonical.get("node_id", "")).lower()
+            sensor = canonical.get("sensor")
+            if not node_id or not isinstance(sensor, dict):
+                continue
+            anomaly_by_node[node_id].append(sensor)
+            if self.forecaster is None or node_id != target_node:
+                continue
+            try:
+                timestamp = datetime.fromisoformat(
+                    str(canonical["timestamp"]).replace("Z", "+00:00")
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            values: dict[str, float] = {}
+            for name in self.forecaster.target_names:
+                value = sensor.get(name)
+                if value is None:
+                    break
+                values[name] = float(value)
+                values[f"has_{name}"] = 1.0
+            else:
+                forecast_buckets[timestamp.replace(second=0, microsecond=0)] = (
+                    str(
+                        canonical.get(
+                            "room_id", self.config.identity.default_room_id
+                        )
+                    ),
+                    values,
+                )
+
+        if self.config.live_runtime.anomaly_enabled:
+            for node_id, sensors in anomaly_by_node.items():
+                for sensor in sensors:
+                    self.anomaly.process(node_id, sensor)
+
+        if self.forecaster is not None:
+            for timestamp in sorted(forecast_buckets):
+                room_id, values = forecast_buckets[timestamp]
+                result = self.forecaster.process(
+                    FeatureVector(
+                        self.config.identity.gateway_id,
+                        target_node,
+                        room_id,
+                        timestamp,
+                        values,
+                    )
+                )
+                self.last_forecast[target_node] = dict(result)
 
     def _raw_record(self, envelope: MQTTEnvelope) -> dict[str, Any]:
         try:

@@ -45,15 +45,18 @@ class LiveForecastTests(unittest.TestCase):
         runtime = LiveEdgeForecaster(self.manifest)
         result = runtime.process(self._vector(0, present=False))
         self.assertEqual(result["status"], "abstain_missing_feature")
+        self.assertEqual(result["model_manifest_id"], "co2-fits-pi5-20260828")
 
     def test_cadence_mismatch_clears_history(self) -> None:
         runtime = LiveEdgeForecaster(self.manifest)
         runtime.process(self._vector(0))
         result = runtime.process(self._vector(1, seconds=20))
         self.assertEqual(result["status"], "abstain_cadence_mismatch")
+        self.assertEqual(result["model_manifest_id"], "co2-fits-pi5-20260828")
         next_result = runtime.process(self._vector(2, seconds=80))
         self.assertEqual(next_result["status"], "warming")
         self.assertEqual(next_result["samples"], 1)
+        self.assertEqual(next_result["model_manifest_id"], "co2-fits-pi5-20260828")
 
     def test_numpy_export_matches_source_torch_checkpoint(self) -> None:
         if not self.model.is_file():

@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -244,6 +245,45 @@ class RuntimeTests(unittest.TestCase):
             self.assertIsNone(runtime.handle(_envelope(1)))
             self.assertEqual(len(publisher.events), 1)
             self.assertEqual(runtime.summary.rejected_total, 1)
+
+    def test_restart_rehydrates_anomaly_state_from_accepted_log(self):
+        with tempfile.TemporaryDirectory() as td:
+            config = self._config(td, "shadow_ai")
+            warmup = 4
+            config = replace(
+                config,
+                live_runtime=replace(
+                    config.live_runtime, anomaly_warmup_samples=warmup
+                ),
+            )
+            state = Path(config.live_runtime.output_dir)
+            state.mkdir(parents=True, exist_ok=True)
+            rows = []
+            for index in range(warmup):
+                rows.append(
+                    {
+                        "canonical": {
+                            "schema_version": "chirpstack_live.v1",
+                            "node_id": NODE1,
+                            "room_id": "room_unassigned",
+                            "timestamp": (
+                                datetime(2026, 9, 25, tzinfo=UTC)
+                                + timedelta(seconds=index * 15)
+                            ).isoformat(),
+                            "sensor": {
+                                "temperature_c": 25.0 + index * 0.01,
+                                "humidity_pct": 50.0,
+                                "co2_ppm": 600.0,
+                            },
+                        }
+                    }
+                )
+            (state / "accepted_events.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n",
+                encoding="utf-8",
+            )
+            runtime = LiveSensorRuntime(config, source=_FakeSource())
+            self.assertEqual(runtime.anomaly.states[NODE1].seen, warmup)
 
 
 if __name__ == "__main__":

@@ -92,6 +92,15 @@ class LiveEdgeForecaster:
         )
         self._last_ts: dict[str, float] = {}
 
+    def _provenance(self) -> dict[str, Any]:
+        return {
+            "model_version": self.runtime_artifact.get("model_version"),
+            "model_type": self.runtime_artifact.get("model_type"),
+            "runtime_backend": self.manifest.get("runtime_backend"),
+            "model_readiness": self.manifest.get("readiness", "EXPERIMENTAL"),
+            "model_manifest_id": self.manifest.get("id"),
+        }
+
     def _predict_normalized(self, history: list[list[float]]) -> list[float]:
         """Replicate edge_forecasting.FitsEdgeForecaster with NumPy."""
 
@@ -146,12 +155,14 @@ class LiveEdgeForecaster:
                     "status": "abstain_missing_feature",
                     "forecast_status": "unavailable",
                     "missing_feature": name,
+                    **self._provenance(),
                 }
             if name not in vector.values or not math.isfinite(float(vector.values[name])):
                 return {
                     "status": "abstain_missing_feature",
                     "forecast_status": "unavailable",
                     "missing_feature": name,
+                    **self._provenance(),
                 }
 
         timestamp = vector.timestamp.timestamp()
@@ -167,6 +178,7 @@ class LiveEdgeForecaster:
                     "forecast_status": "unavailable",
                     "observed_cadence_sec": delta,
                     "expected_cadence_sec": self.expected_cadence_sec,
+                    **self._provenance(),
                 }
         self._last_ts[vector.node_id] = timestamp
 
@@ -179,6 +191,7 @@ class LiveEdgeForecaster:
                 "forecast_status": "warming",
                 "samples": len(history),
                 "required_samples": self.input_length,
+                **self._provenance(),
             }
 
         started = time.perf_counter()
@@ -194,10 +207,6 @@ class LiveEdgeForecaster:
             "predicted": predicted,
             "horizon_steps": int(self.manifest.get("horizon_steps", 1)),
             "horizon_duration_seconds": self.manifest.get("horizon_duration_seconds"),
-            "model_version": self.runtime_artifact.get("model_version"),
-            "model_type": self.runtime_artifact.get("model_type"),
-            "runtime_backend": self.manifest.get("runtime_backend"),
-            "model_readiness": self.manifest.get("readiness", "EXPERIMENTAL"),
-            "model_manifest_id": self.manifest.get("id"),
+            **self._provenance(),
             "inference_latency_ms": latency_ms,
         }

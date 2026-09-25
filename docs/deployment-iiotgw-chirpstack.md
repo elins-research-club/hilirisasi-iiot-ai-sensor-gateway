@@ -130,6 +130,23 @@ waiting_for_resample -> warming -> available_shadow
 
 `not_target_node` sah untuk node yang tidak mempunyai artifact model.
 
+### Restart state
+
+Runtime membaca kembali bagian akhir `accepted_events.jsonl` saat startup untuk
+merehidrasi state anomaly dan window forecast secara bounded. Tujuannya agar
+restart service / restart user-manager tidak menghapus seluruh warm-up evidence.
+Rehydration:
+
+- tidak mem-publish ulang event lama;
+- tidak memasukkan ulang event ke canonical pipeline;
+- hanya memakai `chirpstack_live.v1` accepted observations;
+- dibatasi maksimum 4096 canonical records;
+- anomaly hanya memakai maksimum jumlah sample warm-up per node;
+- forecast direkonstruksi dari bucket 60 detik target model.
+
+Semua state forecast, termasuk `warming` atau abstain, membawa
+`model_manifest_id` dan model/runtime provenance.
+
 Runtime inference menggunakan NumPy rFFT + linear head yang ekuivalen dengan
 FITS edge checkpoint. Parity test pada host membandingkan export terhadap
 checkpoint PyTorch asli; ini sengaja menghindari instalasi ratusan MB PyTorch

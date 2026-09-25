@@ -304,6 +304,10 @@ sebelum bucket pertama statusnya `waiting_for_resample`, lalu `warming`,
 dan baru `available_shadow` setelah window artifact lengkap. Node yang bukan
 target model diberi `not_target_node`.
 
+State warm-up live direhidrasi secara bounded dari accepted observation log saat
+runtime restart. Ini hanya memulihkan AI in-memory state dan **tidak** melakukan
+event replay/publish ulang.
+
 ## 10. `sensor_status.v1`
 
 Topic:
