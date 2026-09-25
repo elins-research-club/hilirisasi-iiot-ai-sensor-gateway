@@ -28,6 +28,7 @@ data/external/
 data/logs/
 logs/
 *.log
+.release-stage/
 
 # Model/data artifacts generated locally
 models/
