@@ -53,7 +53,8 @@ Script:
 4. mempertahankan provenance hash source checkpoint;
 5. upload ke release directory baru;
 6. membuat venv terpisah;
-7. install `.[mqtt,edge]` (Paho + NumPy; tanpa PyTorch/CUDA);
+7. install runtime + target-QA extras `.[mqtt,edge,dev]` secara non-editable
+   (Paho + NumPy + pytest/ruff; tanpa PyTorch/CUDA);
 8. menjalankan compile + full unit tests + config check di Pi;
 9. baru mengubah symlink `current`.
 

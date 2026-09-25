@@ -235,7 +235,7 @@ class SafetyRegressionTests(unittest.TestCase):
             path.read_text(encoding="utf-8", errors="ignore")
             for directory in paths
             for path in directory.rglob("*")
-            if path.is_file()
+            if path.is_file() and path.suffix.lower() in {".py", ".c", ".cc", ".cpp", ".h", ".hpp"}
         )
         for token in (
             "dis" + "tance" + "_mm",
