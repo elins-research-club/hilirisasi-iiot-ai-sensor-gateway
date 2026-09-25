@@ -20,7 +20,7 @@ set -euo pipefail
 cd "$REMOTE_RELEASE"
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install ".[mqtt,edge,dev]"
+.venv/bin/python -m pip install ".[mqtt,edge,serial,dev]"
 .venv/bin/python -m pip check
 export PYTHONPATH=src
 export PYTHONDONTWRITEBYTECODE=1

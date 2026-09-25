@@ -1,6 +1,7 @@
 [Unit]
 Description=IIoT AI Sensor Gateway ChirpStack live runtime
-After=default.target
+Wants=iiot-node-usb-release.service
+After=default.target iiot-node-usb-release.service
 StartLimitIntervalSec=300
 StartLimitBurst=10
 

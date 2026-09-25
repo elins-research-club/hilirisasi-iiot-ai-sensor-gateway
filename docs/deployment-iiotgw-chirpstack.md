@@ -18,6 +18,39 @@ ChirpStack -> AI Sensor Gateway -> raw/canonical -> anomaly/forecast shadow
 Runtime baru tidak mengedit `lora_pkt_fwd`, konfigurasi radio, protected
 `chirpstack_to_emqx.py`, atau existing per-node forwarder.
 
+### Cold-boot compatibility untuk dua node USB
+
+Acceptance reboot 25 September 2026 menemukan dua ESP/LoRa node current
+terhubung melalui CH9102 USB-UART dan ikut power-reset saat Raspberry Pi
+reboot. WM1302, Gateway Bridge, dan packet-forwarder kembali hidup, tetapi
+kedua node tidak kembali mengirim uplink sampai serial bridge dibuka dengan
+DTR/RTS deasserted.
+
+Evidence current:
+
+- stable USB IDs `5926016290` dan `58EF071105`;
+- keduanya menampilkan ESP boot banner pada 115200 baud;
+- log menunjukkan `[LoRaWAN] Joining LoRaWAN Network...` lalu
+  `Join Success!`;
+- sesudah release control-line, kedua DevEUI kembali terlihat di ChirpStack,
+  OTAA mendapat DevAddr baru, fCnt restart, dan legacy Prometheus path kembali
+  PASS.
+
+Karena itu deployment memasang user unit terpisah
+`iiot-node-usb-release.service`. Unit tersebut:
+
+- berjalan sekali setelah `lora-packet-forwarder.service`;
+- menunggu 8 detik supaya concentrator siap;
+- membuka **hanya** dua stable `/dev/serial/by-id` current di 115200 baud;
+- menetapkan DTR/RTS false dan tidak menulis byte apa pun ke node;
+- tidak flash firmware, tidak menyentuh GPIO/WM1302, dan tidak restart service
+  HardProg;
+- memakai `RemainAfterExit=yes`, sehingga restart AI service biasa tidak
+  mengulang recovery node.
+
+Ini compatibility/boot-sequencing shim untuk hardware current. Firmware lama,
+serial/E32 path, dan ownership HardProg tetap dipertahankan.
+
 ## Release Layout
 
 ```text
@@ -28,6 +61,7 @@ Runtime baru tidak mengedit `lora_pkt_fwd`, konfigurasi radio, protected
 ~/.local/state/iiot-ai-sensor-gateway/
 ~/.config/iiot-ai-sensor-gateway/runtime.env
 ~/.config/systemd/user/iiot-ai-sensor-gateway.service
+~/.config/systemd/user/iiot-node-usb-release.service
 ```
 
 Release berasal dari `git archive`, bukan rsync workspace mentah. Dataset,
@@ -53,8 +87,8 @@ Script:
 4. mempertahankan provenance hash source checkpoint;
 5. upload ke release directory baru;
 6. membuat venv terpisah;
-7. install runtime + target-QA extras `.[mqtt,edge,dev]` secara non-editable
-   (Paho + NumPy + pytest/ruff; tanpa PyTorch/CUDA);
+7. install runtime + target-QA extras `.[mqtt,edge,serial,dev]` secara
+   non-editable (Paho + NumPy + PySerial + pytest/ruff; tanpa PyTorch/CUDA);
 8. menjalankan compile + full unit tests + config check di Pi;
 9. baru mengubah symlink `current`.
 

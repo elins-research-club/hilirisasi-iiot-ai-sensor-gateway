@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import unittest
 from pathlib import Path
@@ -28,7 +29,7 @@ class IIoTGWDeploymentTests(unittest.TestCase):
         script = (ROOT / "deployment/iiotgw/deploy-via-tailscale.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn('.[mqtt,edge,dev]', script)
+        self.assertIn('.[mqtt,edge,serial,dev]', script)
         self.assertNotIn('.[mqtt,ml]', script)
         self.assertNotIn("cuda", script.lower())
         self.assertIn("ssh -o BatchMode=yes", script)
@@ -45,6 +46,74 @@ class IIoTGWDeploymentTests(unittest.TestCase):
         self.assertNotIn("lora-packet-forwarder", unit)
         self.assertNotIn("chirpstack-node1-forwarder", unit)
         self.assertNotIn("chirpstack-node2-forwarder", unit)
+
+    def test_usb_node_recovery_is_separate_and_narrow(self) -> None:
+        ai_unit = (ROOT / "systemd/user/iiot-ai-sensor-gateway.service").read_text(
+            encoding="utf-8"
+        )
+        usb_unit = (ROOT / "systemd/user/iiot-node-usb-release.service").read_text(
+            encoding="utf-8"
+        )
+        helper = (
+            ROOT / "deployment/iiotgw/recover_lorawan_usb_nodes.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Wants=iiot-node-usb-release.service", ai_unit)
+        self.assertIn("Before=iiot-ai-sensor-gateway.service", usb_unit)
+        self.assertIn("recover_lorawan_usb_nodes.py", usb_unit)
+        self.assertIn("5926016290", helper)
+        self.assertIn("58EF071105", helper)
+        for forbidden in (
+            "pinctrl",
+            "lora_pkt_fwd",
+            "chirpstack_to_emqx",
+            "systemctl restart",
+            "spidev",
+        ):
+            self.assertNotIn(forbidden, helper)
+
+    def test_usb_recovery_deasserts_control_lines_and_does_not_write(self) -> None:
+        path = ROOT / "deployment/iiotgw/recover_lorawan_usb_nodes.py"
+        spec = importlib.util.spec_from_file_location("usb_recovery", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        class FakeSerial:
+            def __init__(self):
+                self.port = None
+                self.baudrate = None
+                self.timeout = None
+                self.dtr = None
+                self.rts = None
+                self.exclusive = None
+                self.is_open = False
+                self._lines = [
+                    b"rst:0x1 (POWERON_RESET)\n",
+                    b"[LoRaWAN] Joining LoRaWAN Network...\n",
+                ]
+
+            def open(self):
+                self.is_open = True
+
+            def readline(self):
+                return self._lines.pop(0) if self._lines else b""
+
+            def close(self):
+                self.is_open = False
+
+        ticks = iter((0.0, 0.0, 0.1, 0.2, 1.1))
+        fake = FakeSerial()
+        result = module.recover_port(
+            "/dev/fake",
+            serial_factory=lambda: fake,
+            hold_sec=1.0,
+            monotonic=lambda: next(ticks),
+        )
+        self.assertFalse(fake.dtr)
+        self.assertFalse(fake.rts)
+        self.assertEqual(fake.baudrate, 115200)
+        self.assertIn("POWERON_RESET", result["markers"])
+        self.assertIn("Joining LoRaWAN Network", result["markers"])
 
 
 if __name__ == "__main__":
