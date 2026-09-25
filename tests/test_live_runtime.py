@@ -214,6 +214,7 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(payload["schema_version"], "sensor_ai.v2")
             self.assertEqual(payload["source"]["contract"], "chirpstack_live.v1")
             self.assertIsNotNone(payload["ai"]["anomaly_score"])
+            self.assertEqual(payload["ai"]["forecast"]["status"], "disabled")
 
     def test_publish_mode_enqueues_event_and_retained_status(self):
         with tempfile.TemporaryDirectory() as td:

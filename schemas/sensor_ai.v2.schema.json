@@ -69,6 +69,23 @@
         "env_status": {"type": "string", "enum": ["normal", "warning", "critical", "unknown"]},
         "anomaly_score": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
         "forecast_status": {"type": "string"},
+        "forecast": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "predicted", "horizon_steps", "horizon_duration_seconds", "model_type", "model_version", "runtime_backend", "model_readiness", "model_manifest_id", "inference_latency_ms"],
+          "properties": {
+            "status": {"type": "string"},
+            "predicted": {"type": "object", "additionalProperties": {"type": "number"}},
+            "horizon_steps": {"type": ["integer", "null"], "minimum": 1},
+            "horizon_duration_seconds": {"type": ["number", "null"], "minimum": 0},
+            "model_type": {"type": ["string", "null"]},
+            "model_version": {"type": ["string", "null"]},
+            "runtime_backend": {"type": ["string", "null"]},
+            "model_readiness": {"type": "string"},
+            "model_manifest_id": {"type": ["string", "null"]},
+            "inference_latency_ms": {"type": ["number", "null"], "minimum": 0}
+          }
+        },
         "main_factor": {"type": ["string", "null"]},
         "battery_status": {"type": "string", "enum": ["normal", "warning", "critical", "unknown"]},
         "node_health": {"type": "string", "enum": ["healthy", "degraded", "stale", "invalid", "offline", "unknown"]},

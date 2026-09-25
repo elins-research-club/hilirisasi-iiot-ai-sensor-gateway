@@ -110,6 +110,7 @@ class ChirpStackAdapterTests(unittest.TestCase):
         self.assertEqual(payload["source"]["contract"], "chirpstack_live.v1")
         self.assertEqual(payload["source"]["sequence"], 12)
         self.assertNotIn("compact_version", payload["source"])
+        self.assertEqual(payload["ai"]["forecast"]["status"], "unavailable")
 
     def test_malformed_or_unapproved_input_fails_closed(self) -> None:
         with self.assertRaises(ValueError):

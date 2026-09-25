@@ -282,6 +282,28 @@ deployment.model_manifest_id
 Dengan demikian compact origin lama tetap kompatibel sementara live ChirpStack
 dapat membawa provenance yang jujur.
 
+### 9A.1 Forecast payload pada v2
+
+Ketika forecast runtime aktif, `ai.forecast` membawa state yang eksplisit:
+
+```text
+status
+predicted{target: value}
+horizon_steps
+horizon_duration_seconds
+model_type/model_version
+runtime_backend
+model_readiness
+model_manifest_id
+inference_latency_ms
+```
+
+Event yang bukan titik resample tidak lagi dilabeli `disabled` bila model
+sebenarnya aktif. Runtime mempertahankan forecast state terakhir per node;
+sebelum bucket pertama statusnya `waiting_for_resample`, lalu `warming`,
+dan baru `available_shadow` setelah window artifact lengkap. Node yang bukan
+target model diberi `not_target_node`.
+
 ## 10. `sensor_status.v1`
 
 Topic:

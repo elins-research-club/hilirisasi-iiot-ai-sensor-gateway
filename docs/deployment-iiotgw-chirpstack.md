@@ -120,6 +120,16 @@ Forecast memakai manifest
 window 16, cadence 60 s, dan target CO2. Cadence/feature/hash mismatch membuat
 runtime abstain; model tidak boleh dipaksa.
 
+Pada `sensor_ai.v2`, hasil forecast shadow ikut dibawa di `ai.forecast`
+beserta nilai prediksi, horizon, model/runtime provenance, readiness, dan
+latency. Status yang diharapkan:
+
+```text
+waiting_for_resample -> warming -> available_shadow
+```
+
+`not_target_node` sah untuk node yang tidak mempunyai artifact model.
+
 Runtime inference menggunakan NumPy rFFT + linear head yang ekuivalen dengan
 FITS edge checkpoint. Parity test pada host membandingkan export terhadap
 checkpoint PyTorch asli; ini sengaja menghindari instalasi ratusan MB PyTorch

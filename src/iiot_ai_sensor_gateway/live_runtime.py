@@ -158,6 +158,7 @@ class LiveSensorRuntime:
             if config.forecast_runtime.enabled
             else None
         )
+        self.last_forecast: dict[str, dict[str, Any]] = {}
         self.publisher = publisher
         if config.publisher.enabled and self.publisher is None:
             offline_status = build_sensor_status(
@@ -212,13 +213,33 @@ class LiveSensorRuntime:
                 "drift_features": [],
             }
         )
-        forecast: dict[str, Any] = {
-            "status": "disabled",
-            "forecast_status": "unavailable",
-        }
-        if self.forecaster is not None and new_vectors:
-            for vector in new_vectors:
-                forecast = self.forecaster.process(vector)
+        forecast: dict[str, Any]
+        if self.forecaster is None:
+            forecast = {"status": "disabled", "forecast_status": "unavailable"}
+        elif (
+            self.forecaster.target_node_id
+            and reading.node_id.lower() != self.forecaster.target_node_id
+        ):
+            forecast = {"status": "not_target_node", "forecast_status": "unavailable"}
+        else:
+            forecast = self.last_forecast.get(
+                reading.node_id,
+                {
+                    "status": "waiting_for_resample",
+                    "forecast_status": "warming",
+                    "model_type": self.forecaster.runtime_artifact.get("model_type"),
+                    "model_version": self.forecaster.runtime_artifact.get("model_version"),
+                    "runtime_backend": self.forecaster.manifest.get("runtime_backend"),
+                    "model_readiness": self.forecaster.manifest.get(
+                        "readiness", "EXPERIMENTAL"
+                    ),
+                    "model_manifest_id": self.forecaster.manifest.get("id"),
+                },
+            )
+            if new_vectors:
+                for vector in new_vectors:
+                    forecast = self.forecaster.process(vector)
+                self.last_forecast[reading.node_id] = dict(forecast)
         decision = build_sensor_decision(
             sensor=sensor,
             quality=reading.quality,
@@ -232,6 +253,25 @@ class LiveSensorRuntime:
             "env_status": decision["env_status"],
             "anomaly_score": anomaly["anomaly_score"],
             "forecast_status": decision["forecast_status"],
+            "forecast": {
+                "status": str(forecast.get("status", "unavailable")),
+                "predicted": {
+                    str(name): float(value)
+                    for name, value in (forecast.get("predicted") or {}).items()
+                },
+                "horizon_steps": forecast.get("horizon_steps"),
+                "horizon_duration_seconds": forecast.get(
+                    "horizon_duration_seconds"
+                ),
+                "model_type": forecast.get("model_type"),
+                "model_version": forecast.get("model_version"),
+                "runtime_backend": forecast.get("runtime_backend"),
+                "model_readiness": str(
+                    forecast.get("model_readiness", "EXPERIMENTAL")
+                ),
+                "model_manifest_id": forecast.get("model_manifest_id"),
+                "inference_latency_ms": forecast.get("inference_latency_ms"),
+            },
             "main_factor": decision["main_factor"],
             "battery_status": decision["battery_status"],
             "node_health": decision["node_health"],
