@@ -12,10 +12,10 @@ REMOTE_BASE="/home/iiotgw/apps/iiot-ai-sensor-gateway"
 REMOTE_RELEASE="$REMOTE_BASE/releases/$RELEASE_ID"
 
 echo "==> Upload release $RELEASE_ID"
-tar -C "$STAGE" -czf - . | tailscale ssh iiotgw@iiotgw +  "mkdir -p '$REMOTE_RELEASE' && tar -xzf - -C '$REMOTE_RELEASE'"
+tar -C "$STAGE" -czf - . | ssh -o BatchMode=yes iiotgw@iiotgw "mkdir -p '$REMOTE_RELEASE' && tar -xzf - -C '$REMOTE_RELEASE'"
 
 echo "==> Create isolated venv and install runtime dependencies"
-tailscale ssh iiotgw@iiotgw "bash -lc '
+ssh -o BatchMode=yes iiotgw@iiotgw "bash -lc '
 set -euo pipefail
 cd "$REMOTE_RELEASE"
 python3 -m venv .venv
@@ -29,6 +29,6 @@ export PYTHONPATH=src
 '"
 
 echo "==> Promote current symlink only after target QA passes"
-tailscale ssh iiotgw@iiotgw +  "mkdir -p '$REMOTE_BASE/releases' && ln -sfn '$REMOTE_RELEASE' '$REMOTE_BASE/current'"
+ssh -o BatchMode=yes iiotgw@iiotgw "mkdir -p '$REMOTE_BASE/releases' && ln -sfn '$REMOTE_RELEASE' '$REMOTE_BASE/current'"
 
 echo "DEPLOY_RELEASE=$RELEASE_ID"
