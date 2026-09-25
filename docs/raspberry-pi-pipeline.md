@@ -131,7 +131,15 @@ windows.jsonl
 normalization_report.json
 ```
 
-Runtime builder mendukung `sensor_ai.v1`; status builder mendukung `sensor_status.v1`. MQTT publisher/outbox/LWT/TLS production belum E2E.
+Runtime builder mendukung `sensor_ai.v1` untuk compact-origin dan
+`sensor_ai.v2` untuk source-agnostic live integration; status builder
+mendukung `sensor_status.v1`.
+
+**Update deployment 25 September 2026:** current `iiotgw` ChirpStack lane sudah
+broker-E2E pada `sensor_ai.v2` dengan QoS1, retained status/LWT, SQLite event
+outbox, publish confirmation, reconnect, restart-state restore, cold reboot,
+dan versioned rollback. TLS/ACL dan downstream database/API/dashboard tetap
+belum production-E2E.
 
 ## Data Lanes
 
@@ -143,4 +151,18 @@ Setiap lane memiliki provenance/adapter. Synthetic/reference result tidak boleh 
 
 ## Current Verification
 
-Host tests mencakup v3/parser/provenance, identity isolation, receiver restart, serial sleep/backoff, replay L0–L4, cadence/quality/baseline gates, anomaly harness, runner helpers, dan decision layer. Firmware v3 profile compile. Raspberry Pi runtime/resource, hardware sensor/E32, broker, real accuracy, dan soak belum diukur.
+Host tests mencakup v3/parser/provenance, ChirpStack adapter, identity/session
+isolation, receiver/restart, durable publisher/outbox, replay L0–L4,
+cadence/quality/baseline gates, anomaly harness, live forecast state, deployment
+helpers, dan decision layer. Final host suite 25 September: **126/126 PASS**.
+
+Release yang sama sudah diuji di Raspberry Pi `iiotgw`: 126 tests discovered,
+OK dengan expected host/development-only skips; critical source/config/unit
+hashes cocok byte-for-byte dengan release; runtime sekitar 50 MB RSS pada
+snapshot commissioning; cold reboot/OTAA recovery/rollback broker path PASS.
+
+Data provenance current tetap dibatasi: Node 1 values = dummy JSON HardProg
+meski transport live; Node 2 temp/RH = BME fisik test setup. Karena itu Node 1
+forecast current hanya runtime/plumbing evidence. Final hardware definition,
+real-RAB accuracy/calibration, 24–72 h soak, TLS/ACL, dan downstream
+TimescaleDB/FastAPI/dashboard tetap open.

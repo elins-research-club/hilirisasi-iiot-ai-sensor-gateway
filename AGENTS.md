@@ -11,7 +11,7 @@ Repo ini khusus node sensor dan AI sensor gateway:
 - receiver serial/replay, parser, validation, dan canonical record;
 - preprocessing Raspberry Pi: resampling, feature extraction, normalization, windowing;
 - dataset adapter, baseline, forecasting, anomaly/drift, dan decision layer;
-- kontrak `sensor_ai.v1` dan `sensor_status.v1` menuju MQTT/backend.
+- kontrak `sensor_ai.v1` compact-origin, `sensor_ai.v2` source-agnostic live, dan `sensor_status.v1` menuju MQTT/backend.
 
 Jangan mengerjakan computer vision, backend/dashboard penuh, broker produksi, OpenClaw runtime, atau deployment produksi final kecuali diminta eksplisit.
 
@@ -46,6 +46,10 @@ AI utama tetap di Raspberry Pi/laptop/server Python. ESP32-C6 tidak menjalankan 
 
 ## State Aktual
 
+- Deployment current `iiotgw` memakai source `chirpstack_live.v1` dan publish canonical `sensor_ai.v2` pada `iot/iiotgw/data`; `sensor_ai.v1` tetap compact-origin contract.
+- Provenance HardProg test current: Node 1 RF/LoRaWAN live tetapi nilai sensornya dummy JSON; Node 2 temperature/humidity berasal dari BME fisik dan application payload current 7 byte `>BHHH`.
+- Runtime current memiliki durable raw/canonical logs, SQLite event outbox, QoS 1 publish confirmation, retained `sensor_status.v1`, reconnect handling, restart-state restore, dan versioned Pi deployment/rollback.
+- Full cold reboot current sudah diuji; unit `iiot-node-usb-release.service` menangani dua USB-attached ESP/LoRa test nodes agar OTAA rejoin kembali berjalan tanpa mengedit firmware/WM1302/HardProg protected source.
 - Default firmware adalah environment `mock`; environment `hardware` terpisah.
 - Firmware mock menghasilkan payload v3 hardware observation lengkap dan valid; v2 tetap parser-compatible untuk migration/replay.
 - Hardware path yang tersedia: SEN0466 ber-checksum, SEN0321 automatic-read, ADC terkalibrasi SEN0574, INA226, SC16IS752 dual-UART, MH-Z19 checksum/warm-up, PMS7003T passive-frame/checksum/warm-up, serta adapter Bosch BME68x SensorAPI. Profile BME dengan source resmi sudah compile-validated; default tetap disabled bila dependency lokal tidak ada. Semua jalur baru belum hardware-verified dan harus fail-closed.
@@ -86,7 +90,8 @@ Schema resmi:
 
 - `schemas/compact_sensor.v3.schema.json` — hardware observation aktif;
 - `schemas/compact_sensor.v2.schema.json` — migration/legacy node-preprocessed;
-- `schemas/sensor_ai.v1.schema.json`
+- `schemas/sensor_ai.v1.schema.json` — compact-origin event;
+- `schemas/sensor_ai.v2.schema.json` — live/source-agnostic event;
 - `schemas/sensor_status.v1.schema.json`
 
 ## Data Policy
