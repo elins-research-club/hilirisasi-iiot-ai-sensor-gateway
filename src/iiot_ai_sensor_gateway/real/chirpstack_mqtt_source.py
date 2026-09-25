@@ -128,7 +128,12 @@ class ChirpStackMQTTSource:
         client.on_connect = self._on_connect
         client.on_disconnect = self._on_disconnect
         client.on_message = self._on_message
-        client.connect(self.host, self.port, self.keepalive)
+        # Boot ordering is intentionally asynchronous. On iiotgw the local
+        # Mosquitto / ChirpStack containers can become ready after the user
+        # systemd manager starts this service. connect_async + loop_start lets
+        # Paho retry in the network thread instead of crashing the process and
+        # relying on systemd restart loops.
+        client.connect_async(self.host, self.port, self.keepalive)
         client.loop_start()
         self._client = client
         self._started = True

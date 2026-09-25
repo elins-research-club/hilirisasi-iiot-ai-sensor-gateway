@@ -168,7 +168,9 @@ class ReliableMQTTPublisher:
         client.reconnect_delay_set(self.reconnect_min_sec, self.reconnect_max_sec)
         client.on_connect = self._on_connect
         client.on_disconnect = self._on_disconnect
-        client.connect(self.host, self.port, self.keepalive)
+        # Do not make service startup depend on the remote broker already
+        # accepting TCP. Paho's network loop owns exponential reconnect.
+        client.connect_async(self.host, self.port, self.keepalive)
         client.loop_start()
         self._client = client
 
@@ -189,7 +191,7 @@ class ReliableMQTTPublisher:
     def flush(self, *, limit: int = 100) -> int:
         self.start()
         client = self._client
-        if client is None:
+        if client is None or not self.connected:
             return 0
         sent = 0
         for record in self.outbox.pending(limit):
@@ -215,7 +217,7 @@ class ReliableMQTTPublisher:
 
         self.start()
         client = self._client
-        if client is None:
+        if client is None or not self.connected:
             return False
         encoded = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         try:

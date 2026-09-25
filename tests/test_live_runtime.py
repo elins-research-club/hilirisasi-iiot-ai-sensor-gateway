@@ -83,6 +83,29 @@ class _FakeClient:
         return _PublishInfo(True)
 
 
+class _AsyncConnectClient:
+    def __init__(self):
+        self.calls = []
+        self.on_connect = None
+        self.on_disconnect = None
+        self.on_message = None
+
+    def reconnect_delay_set(self, minimum, maximum):
+        self.calls.append(("reconnect_delay_set", minimum, maximum))
+
+    def connect_async(self, host, port, keepalive):
+        self.calls.append(("connect_async", host, port, keepalive))
+
+    def loop_start(self):
+        self.calls.append(("loop_start",))
+
+    def loop_stop(self):
+        self.calls.append(("loop_stop",))
+
+    def disconnect(self):
+        self.calls.append(("disconnect",))
+
+
 class _ReasonCodeLike:
     def __init__(self, value: int):
         self.value = value
@@ -154,6 +177,47 @@ class OutboxTests(unittest.TestCase):
                 publisher.publish_status_json("iot/test/status", {"status": "online"})
             )
             self.assertEqual(client.calls[-1][2:], (1, True))
+
+    def test_publisher_defers_flush_until_async_connect_callback(self):
+        with tempfile.TemporaryDirectory() as td:
+            outbox = SQLiteOutbox(Path(td) / "outbox.sqlite3")
+            client = _AsyncConnectClient()
+            publisher = ReliableMQTTPublisher(
+                host="broker",
+                port=1883,
+                client_id="test-async",
+                outbox=outbox,
+                client=client,
+            )
+            # Injected clients are treated as already usable by the generic
+            # fake path, so verify the real start behavior by temporarily
+            # making this publisher own the fake client.
+            publisher._owns_client = True
+            publisher._client = None
+            original = publisher._mqtt_module
+            try:
+                class _Factory:
+                    MQTT_ERR_SUCCESS = 0
+
+                    @staticmethod
+                    def Client(*args, **kwargs):
+                        return client
+
+                class _Api:
+                    VERSION2 = 2
+
+                publisher._mqtt_module = lambda: (_Factory, _Api)
+                publisher.start()
+            finally:
+                publisher._mqtt_module = original
+            self.assertIn(("connect_async", "broker", 1883, 30), client.calls)
+            self.assertIn(("loop_start",), client.calls)
+            outbox.enqueue("evt", "iot/test/data", "{}")
+            self.assertEqual(publisher.flush(), 0)
+            self.assertEqual(outbox.count(), 1)
+            publisher._on_connect(client, None, None, 0)
+            # No publish implementation on this fake: the point is startup
+            # must be non-blocking and retain the outbox while disconnected.
 
     def test_paho_v2_reason_code_callbacks(self):
         source = ChirpStackMQTTSource()
