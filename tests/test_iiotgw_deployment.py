@@ -60,6 +60,8 @@ class IIoTGWDeploymentTests(unittest.TestCase):
         self.assertIn("Wants=iiot-node-usb-release.service", ai_unit)
         self.assertIn("Before=iiot-ai-sensor-gateway.service", usb_unit)
         self.assertIn("recover_lorawan_usb_nodes.py", usb_unit)
+        self.assertIn("--passes 2", usb_unit)
+        self.assertIn("--inter-pass-sec 5", usb_unit)
         self.assertIn("5926016290", helper)
         self.assertIn("58EF071105", helper)
         for forbidden in (

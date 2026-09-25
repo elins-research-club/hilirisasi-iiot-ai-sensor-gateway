@@ -91,11 +91,19 @@ def main() -> int:
     parser.add_argument("--port", action="append", dest="ports")
     parser.add_argument("--wait-for-devices-sec", type=float, default=60.0)
     parser.add_argument("--hold-sec", type=float, default=5.0)
+    parser.add_argument("--passes", type=int, default=2)
+    parser.add_argument("--inter-pass-sec", type=float, default=5.0)
     args = parser.parse_args()
 
     ports = tuple(args.ports or DEFAULT_PORTS)
-    if not ports or args.wait_for_devices_sec <= 0 or args.hold_sec <= 0:
-        parser.error("ports and timeout values must be positive/non-empty")
+    if (
+        not ports
+        or args.wait_for_devices_sec <= 0
+        or args.hold_sec <= 0
+        or args.passes < 1
+        or args.inter_pass_sec < 0
+    ):
+        parser.error("ports/passes and timeout values must be valid")
 
     wait_for_paths(ports, timeout_sec=args.wait_for_devices_sec)
 
@@ -104,16 +112,21 @@ def main() -> int:
     except ModuleNotFoundError as exc:  # pragma: no cover
         raise SystemExit("pyserial is required; install project extra 'serial'") from exc
 
-    results = [
-        recover_port(path, serial_factory=serial.Serial, hold_sec=args.hold_sec)
-        for path in ports
-    ]
+    passes: list[dict[str, Any]] = []
+    for pass_index in range(args.passes):
+        results = [
+            recover_port(path, serial_factory=serial.Serial, hold_sec=args.hold_sec)
+            for path in ports
+        ]
+        passes.append({"pass": pass_index + 1, "ports": results})
+        if pass_index + 1 < args.passes and args.inter_pass_sec:
+            time.sleep(args.inter_pass_sec)
     print(
         json.dumps(
             {
                 "schema": "iiot.ops.usb_lorawan_recovery.v1",
                 "status": "PASS",
-                "ports": results,
+                "passes": passes,
             },
             sort_keys=True,
         ),

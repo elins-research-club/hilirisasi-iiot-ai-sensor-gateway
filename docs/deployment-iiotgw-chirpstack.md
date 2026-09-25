@@ -43,6 +43,9 @@ Karena itu deployment memasang user unit terpisah
 - menunggu 8 detik supaya concentrator siap;
 - membuka **hanya** dua stable `/dev/serial/by-id` current di 115200 baud;
 - menetapkan DTR/RTS false dan tidak menulis byte apa pun ke node;
+- menjalankan dua bounded release pass dengan jeda 5 detik; cold-boot evidence
+  menunjukkan pass pertama dapat berhenti di `POWERON_RESET` pada salah satu
+  board, sedangkan release kedua mengembalikan kedua DevEUI;
 - tidak flash firmware, tidak menyentuh GPIO/WM1302, dan tidak restart service
   HardProg;
 - memakai `RemainAfterExit=yes`, sehingga restart AI service biasa tidak
