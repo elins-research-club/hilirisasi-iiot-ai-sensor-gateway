@@ -165,26 +165,34 @@ class LiveEdgeForecaster:
                     **self._provenance(),
                 }
 
+        row = [self._normalize(name, float(vector.values[name])) for name in self.target_names]
+        history = self._history[vector.node_id]
         timestamp = vector.timestamp.timestamp()
         previous = self._last_ts.get(vector.node_id)
         if previous is not None:
             delta = timestamp - previous
-            tolerance = self.expected_cadence_sec * self.cadence_tolerance_fraction
-            if abs(delta - self.expected_cadence_sec) > tolerance:
-                self._history[vector.node_id].clear()
+            if abs(delta) <= 1e-6:
+                if history:
+                    history[-1] = row
+                else:
+                    history.append(row)
+            else:
+                tolerance = self.expected_cadence_sec * self.cadence_tolerance_fraction
+                if abs(delta - self.expected_cadence_sec) > tolerance:
+                    history.clear()
+                    self._last_ts[vector.node_id] = timestamp
+                    return {
+                        "status": "abstain_cadence_mismatch",
+                        "forecast_status": "unavailable",
+                        "observed_cadence_sec": delta,
+                        "expected_cadence_sec": self.expected_cadence_sec,
+                        **self._provenance(),
+                    }
+                history.append(row)
                 self._last_ts[vector.node_id] = timestamp
-                return {
-                    "status": "abstain_cadence_mismatch",
-                    "forecast_status": "unavailable",
-                    "observed_cadence_sec": delta,
-                    "expected_cadence_sec": self.expected_cadence_sec,
-                    **self._provenance(),
-                }
-        self._last_ts[vector.node_id] = timestamp
-
-        row = [self._normalize(name, float(vector.values[name])) for name in self.target_names]
-        history = self._history[vector.node_id]
-        history.append(row)
+        else:
+            history.append(row)
+            self._last_ts[vector.node_id] = timestamp
         if len(history) < self.input_length:
             return {
                 "status": "warming",

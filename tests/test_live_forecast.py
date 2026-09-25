@@ -58,6 +58,17 @@ class LiveForecastTests(unittest.TestCase):
         self.assertEqual(next_result["samples"], 1)
         self.assertEqual(next_result["model_manifest_id"], "co2-fits-pi5-20260828")
 
+    def test_same_bucket_update_preserves_rehydrated_history(self) -> None:
+        runtime = LiveEdgeForecaster(self.manifest)
+        for index in range(16):
+            result = runtime.process(self._vector(index))
+        self.assertEqual(result["status"], "ok")
+        duplicate_bucket = runtime.process(self._vector(99, seconds=15 * 60))
+        self.assertEqual(duplicate_bucket["status"], "ok")
+        self.assertEqual(
+            duplicate_bucket["model_manifest_id"], "co2-fits-pi5-20260828"
+        )
+
     def test_numpy_export_matches_source_torch_checkpoint(self) -> None:
         if not self.model.is_file():
             self.skipTest("source PyTorch checkpoint is not bundled on target")

@@ -147,6 +147,11 @@ Rehydration:
 Semua state forecast, termasuk `warming` atau abstain, membawa
 `model_manifest_id` dan model/runtime provenance.
 
+Jika restart terjadi di tengah bucket menit yang sama dengan bucket terakhir
+hasil rehydrasi, update dengan timestamp bucket yang sama diperlakukan
+idempotent (replace last bucket), bukan sebagai cadence mismatch. Bucket yang
+benar-benar loncat/terlambat tetap fail-closed.
+
 Runtime inference menggunakan NumPy rFFT + linear head yang ekuivalen dengan
 FITS edge checkpoint. Parity test pada host membandingkan export terhadap
 checkpoint PyTorch asli; ini sengaja menghindari instalasi ratusan MB PyTorch
