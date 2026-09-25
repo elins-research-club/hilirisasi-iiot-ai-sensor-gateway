@@ -142,7 +142,7 @@ class ReliableMQTTPublisher:
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None) -> None:
         del client, userdata, flags, properties
-        if int(reason_code) == 0:
+        if reason_code == 0:
             self._connected.set()
         else:
             self._connected.clear()

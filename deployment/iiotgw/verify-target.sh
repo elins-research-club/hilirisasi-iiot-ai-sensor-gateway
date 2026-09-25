@@ -28,4 +28,5 @@ assert d == m["runtime_artifact_sha256"]
 print("runtime_artifact_hash=PASS")
 PY
 echo "=== SERVICE ==="
-systemctl --user show iiot-ai-sensor-gateway.service +  -p ActiveState -p SubState -p UnitFileState -p MainPID -p NRestarts --no-pager
+systemctl --user show iiot-ai-sensor-gateway.service \
+  -p ActiveState -p SubState -p UnitFileState -p MainPID -p NRestarts --no-pager

@@ -6,6 +6,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from iiot_ai_sensor_gateway.config import load_config
 from iiot_ai_sensor_gateway.live_runtime import LiveSensorRuntime
@@ -15,6 +16,7 @@ from iiot_ai_sensor_gateway.mqtt_publisher import (
     SQLiteOutbox,
 )
 from iiot_ai_sensor_gateway.real.chirpstack_mqtt_source import MQTTEnvelope
+from iiot_ai_sensor_gateway.real.chirpstack_mqtt_source import ChirpStackMQTTSource
 
 NODE1 = "737fa3925c5c2bba"
 
@@ -80,6 +82,23 @@ class _FakeClient:
         return _PublishInfo(True)
 
 
+class _ReasonCodeLike:
+    def __init__(self, value: int):
+        self.value = value
+
+    def __eq__(self, other):
+        return self.value == other
+
+
+class _SubscribeClient:
+    def __init__(self):
+        self.calls = []
+
+    def subscribe(self, topic, qos=0):
+        self.calls.append((topic, qos))
+        return 0, 1
+
+
 class _FakePublisher:
     def __init__(self):
         self.events = []
@@ -134,6 +153,33 @@ class OutboxTests(unittest.TestCase):
                 publisher.publish_status_json("iot/test/status", {"status": "online"})
             )
             self.assertEqual(client.calls[-1][2:], (1, True))
+
+    def test_paho_v2_reason_code_callbacks(self):
+        source = ChirpStackMQTTSource()
+        client = _SubscribeClient()
+        fake_mqtt = SimpleNamespace(MQTT_ERR_SUCCESS=0)
+        with patch.object(
+            ChirpStackMQTTSource,
+            "_mqtt_module",
+            return_value=(fake_mqtt, object()),
+        ):
+            source._on_connect(client, None, {}, _ReasonCodeLike(0))
+        self.assertTrue(source.connected)
+        self.assertEqual(client.calls, [(source.topic, 0)])
+
+        with tempfile.TemporaryDirectory() as td:
+            publisher = ReliableMQTTPublisher(
+                host="example",
+                port=1883,
+                client_id="test",
+                outbox=SQLiteOutbox(Path(td) / "outbox.sqlite3"),
+                client=_FakeClient(),
+            )
+            publisher._connected.clear()
+            publisher._on_connect(None, None, {}, _ReasonCodeLike(0))
+            self.assertTrue(publisher.connected)
+            publisher._on_connect(None, None, {}, _ReasonCodeLike(1))
+            self.assertFalse(publisher.connected)
 
 
 class RuntimeTests(unittest.TestCase):

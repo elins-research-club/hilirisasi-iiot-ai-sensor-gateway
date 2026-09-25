@@ -86,7 +86,9 @@ class ChirpStackMQTTSource:
 
     def _on_connect(self, client, userdata, flags, reason_code, properties=None) -> None:
         del userdata, flags, properties
-        if int(reason_code) != 0:
+        # Paho callback API v2 passes a ReasonCode object. Compare to zero
+        # directly; coercing it with int() is not portable across Paho 2.x.
+        if reason_code != 0:
             self._connected.clear()
             return
         result, _mid = client.subscribe(self.topic, qos=0)
