@@ -17,6 +17,7 @@ ml = ['numpy>=2.0', 'torch>=2.6']
 serial = ['pyserial>=3.5']
 streaming = ['river>=0.22']
 mqtt = ['paho-mqtt>=2.1,<3']
+edge = ['numpy>=1.26,<3']
 
 [project.scripts]
 iiot-ai-sensor-gateway = 'iiot_ai_sensor_gateway.cli:main'

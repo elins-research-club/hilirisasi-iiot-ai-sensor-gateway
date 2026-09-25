@@ -11,21 +11,21 @@ echo "=== CONFIG ==="
 echo "=== IMPORTS ==="
 "$PY" - <<'PY'
 import paho.mqtt.client
-import torch
+import numpy
 import iiot_ai_sensor_gateway
 print("imports=PASS")
-print("torch", torch.__version__)
+print("numpy", numpy.__version__)
 PY
-echo "=== MODEL SHA ==="
+echo "=== RUNTIME MODEL ARTIFACT SHA ==="
 "$PY" - <<'PY'
 import hashlib, json, pathlib
 root=pathlib.Path.home()/"apps/iiot-ai-sensor-gateway/current"
 m=json.loads((root/"deployment/model-manifests/co2_fits_pi5_20260828.json").read_text())
-p=root/m["model_path"]
+p=root/m["runtime_artifact_path"]
 d=hashlib.sha256(p.read_bytes()).hexdigest()
 print(d)
-assert d == m["model_sha256"]
-print("model_hash=PASS")
+assert d == m["runtime_artifact_sha256"]
+print("runtime_artifact_hash=PASS")
 PY
 echo "=== SERVICE ==="
 systemctl --user show iiot-ai-sensor-gateway.service +  -p ActiveState -p SubState -p UnitFileState -p MainPID -p NRestarts --no-pager

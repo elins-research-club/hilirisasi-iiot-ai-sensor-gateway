@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import FeatureVector
-from .edge_forecasting import load_edge_model
 
 
 def _sha256(path: Path) -> str:
@@ -21,7 +20,12 @@ def _sha256(path: Path) -> str:
 
 
 class LiveEdgeForecaster:
-    """Fail-closed live inference wrapper for a promoted edge forecast artifact."""
+    """Fail-closed NumPy runtime for the promoted FITS edge artifact.
+
+    Training/evaluation still uses the original PyTorch checkpoint. Deployment
+    uses an exported, checksummed linear-head artifact so a CPU Raspberry Pi
+    does not need PyTorch or any CUDA dependency.
+    """
 
     def __init__(
         self,
@@ -31,28 +35,50 @@ class LiveEdgeForecaster:
         cadence_tolerance_fraction: float = 0.20,
         device: str = "cpu",
     ) -> None:
+        del device  # kept for backwards call compatibility; runtime is NumPy/CPU only.
         self.manifest_path = Path(manifest_path)
         if not self.manifest_path.is_file():
             raise FileNotFoundError(f"forecast manifest not found: {self.manifest_path}")
         self.manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         if self.manifest.get("schema") != "iiot.ai_sensor.model_manifest.v1":
             raise ValueError("unsupported forecast manifest schema")
-        model_ref = Path(str(self.manifest["model_path"]))
-        if not model_ref.is_absolute():
-            model_ref = (self.manifest_path.parent.parent.parent / model_ref).resolve()
-        self.model_path = model_ref
-        expected_sha = str(self.manifest.get("model_sha256", "")).lower()
-        if not expected_sha or _sha256(self.model_path) != expected_sha:
-            raise ValueError("forecast model SHA-256 mismatch")
-        self.model, self.checkpoint, self.device = load_edge_model(self.model_path, device)
+        artifact_ref = Path(str(self.manifest["runtime_artifact_path"]))
+        if not artifact_ref.is_absolute():
+            artifact_ref = (self.manifest_path.parent.parent.parent / artifact_ref).resolve()
+        self.runtime_artifact_path = artifact_ref
+        expected_sha = str(self.manifest.get("runtime_artifact_sha256", "")).lower()
+        if not expected_sha or _sha256(self.runtime_artifact_path) != expected_sha:
+            raise ValueError("forecast runtime artifact SHA-256 mismatch")
+        self.runtime_artifact = json.loads(
+            self.runtime_artifact_path.read_text(encoding="utf-8")
+        )
+        if (
+            self.runtime_artifact.get("schema")
+            != "iiot.ai_sensor.fits_numpy_runtime.v1"
+        ):
+            raise ValueError("unsupported forecast runtime artifact schema")
+        if self.runtime_artifact.get("model_type") != "fits":
+            raise ValueError("only FITS NumPy runtime artifact is supported")
+        if (
+            self.runtime_artifact.get("source_checkpoint_sha256")
+            != self.manifest.get("source_checkpoint_sha256")
+        ):
+            raise ValueError("runtime artifact source checkpoint provenance mismatch")
         self.target_node_id = target_node_id.lower().strip()
         self.cadence_tolerance_fraction = cadence_tolerance_fraction
-        self.input_length = int(self.checkpoint["input_length"])
-        self.target_names = tuple(str(x) for x in self.checkpoint["target_names"])
+        self.input_length = int(self.runtime_artifact["input_length"])
+        self.frequency_bins = int(self.runtime_artifact["frequency_bins"])
+        self.target_names = tuple(
+            str(x) for x in self.runtime_artifact["target_names"]
+        )
         self.normalization_ranges = {
             str(name): (float(bounds[0]), float(bounds[1]))
-            for name, bounds in self.checkpoint.get("normalization_ranges", {}).items()
+            for name, bounds in self.runtime_artifact.get(
+                "normalization_ranges", {}
+            ).items()
         }
+        self.head_weight = self.runtime_artifact["head_weight"]
+        self.head_bias = self.runtime_artifact["head_bias"]
         manifest_targets = tuple(str(x) for x in self.manifest.get("target_names", []))
         if manifest_targets and manifest_targets != self.target_names:
             raise ValueError("manifest target_names mismatch checkpoint")
@@ -65,6 +91,37 @@ class LiveEdgeForecaster:
             lambda: deque(maxlen=self.input_length)
         )
         self._last_ts: dict[str, float] = {}
+
+    def _predict_normalized(self, history: list[list[float]]) -> list[float]:
+        """Replicate edge_forecasting.FitsEdgeForecaster with NumPy."""
+
+        try:
+            import numpy as np
+        except ModuleNotFoundError as exc:  # pragma: no cover - deployment preflight
+            raise RuntimeError(
+                "NumPy edge runtime is required; install project extra 'edge'"
+            ) from exc
+
+        values = np.asarray(history, dtype=np.float32)
+        if values.shape != (self.input_length, len(self.target_names)):
+            raise ValueError(
+                "forecast history shape mismatch: "
+                f"{values.shape} != {(self.input_length, len(self.target_names))}"
+            )
+        mean = values.mean(axis=0, keepdims=True, dtype=np.float32)
+        scale = values.std(axis=0, keepdims=True, dtype=np.float32)
+        scale = np.maximum(scale, np.float32(1e-5))
+        normalized = (values - mean) / scale
+        spectrum = np.fft.rfft(normalized, axis=0)[: self.frequency_bins, :]
+        features = np.concatenate((spectrum.real, spectrum.imag), axis=0)
+        features = np.asarray(features.reshape(-1), dtype=np.float32)
+        weight = np.asarray(self.head_weight, dtype=np.float32)
+        bias = np.asarray(self.head_bias, dtype=np.float32)
+        if weight.shape != (len(self.target_names), features.shape[0]):
+            raise ValueError("runtime head weight shape does not match feature shape")
+        residual = weight @ features + bias
+        prediction = values[-1, :] + residual * scale[0, :]
+        return [float(item) for item in prediction]
 
     def _normalize(self, name: str, value: float) -> float:
         if name not in self.normalization_ranges:
@@ -124,12 +181,8 @@ class LiveEdgeForecaster:
                 "required_samples": self.input_length,
             }
 
-        import torch
-
-        target_history = torch.tensor([list(history)], dtype=torch.float32, device=self.device)
         started = time.perf_counter()
-        with torch.no_grad():
-            prediction = self.model(target_history).detach().cpu().numpy()[0]
+        prediction = self._predict_normalized(list(history))
         latency_ms = (time.perf_counter() - started) * 1000.0
         predicted = {
             name: self._denormalize(name, float(prediction[index]))
@@ -141,8 +194,9 @@ class LiveEdgeForecaster:
             "predicted": predicted,
             "horizon_steps": int(self.manifest.get("horizon_steps", 1)),
             "horizon_duration_seconds": self.manifest.get("horizon_duration_seconds"),
-            "model_version": self.checkpoint.get("model_version"),
-            "model_type": self.checkpoint.get("model_type"),
+            "model_version": self.runtime_artifact.get("model_version"),
+            "model_type": self.runtime_artifact.get("model_type"),
+            "runtime_backend": self.manifest.get("runtime_backend"),
             "model_readiness": self.manifest.get("readiness", "EXPERIMENTAL"),
             "model_manifest_id": self.manifest.get("id"),
             "inference_latency_ms": latency_ms,

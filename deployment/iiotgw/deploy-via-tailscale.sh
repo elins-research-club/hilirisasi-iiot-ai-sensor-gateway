@@ -20,7 +20,7 @@ set -euo pipefail
 cd "$REMOTE_RELEASE"
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -e ".[mqtt,ml]"
+.venv/bin/python -m pip install -e ".[mqtt,edge]"
 .venv/bin/python -m pip check
 export PYTHONPATH=src
 .venv/bin/python -m compileall -q src tests run_gateway.py

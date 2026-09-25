@@ -1,8 +1,11 @@
 {
   "schema": "iiot.ai_sensor.model_manifest.v1",
   "id": "co2-fits-pi5-20260828",
-  "model_path": "deployment/models/co2_fits_pi5_20260828.pt",
-  "model_sha256": "def7e300f77a2c06804cf781bd472b9d96092e4ed73415557188da278795755d",
+  "source_checkpoint_path": "models/pi5/data_co2/fits/model.pt",
+  "source_checkpoint_sha256": "def7e300f77a2c06804cf781bd472b9d96092e4ed73415557188da278795755d",
+  "runtime_artifact_path": "deployment/models/co2_fits_pi5_20260828.runtime.json",
+  "runtime_artifact_sha256": "bc9520ceb10db52eb4b4d85f2ca6a2a999297c8b83fd84f400811f37eff1ff82",
+  "runtime_backend": "numpy_fits_v1",
   "model_type": "fits",
   "model_version": "fits_edge_v2",
   "target_names": ["co2_ppm"],

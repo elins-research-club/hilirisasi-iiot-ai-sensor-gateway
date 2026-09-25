@@ -40,6 +40,10 @@ models/
 *.npy
 *.npz
 
+# Tiny, reviewable edge-runtime exports are explicit deployment source assets.
+!deployment/models/
+!deployment/models/*.runtime.json
+
 # OS/editor
 .DS_Store
 Thumbs.db

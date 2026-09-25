@@ -1,0 +1,46 @@
+{
+  "schema": "iiot.ai_sensor.fits_numpy_runtime.v1",
+  "id": "co2-fits-pi5-20260828-numpy",
+  "source_checkpoint_sha256": "def7e300f77a2c06804cf781bd472b9d96092e4ed73415557188da278795755d",
+  "model_type": "fits",
+  "model_version": "fits_edge_v2",
+  "input_length": 16,
+  "frequency_bins": 8,
+  "target_names": [
+    "co2_ppm"
+  ],
+  "normalization_ranges": {
+    "co2_ppm": [
+      -1.0,
+      5000.0
+    ]
+  },
+  "head_weight": [
+    [
+      0.03315409645438194,
+      -0.012471823953092098,
+      -0.009958704002201557,
+      -0.006732937879860401,
+      0.0010861753253266215,
+      0.0056066494435071945,
+      0.01011425256729126,
+      0.015667567029595375,
+      0.0,
+      -0.002234420506283641,
+      -0.009173822589218616,
+      -0.013874656520783901,
+      -0.014687880873680115,
+      -0.012943734414875507,
+      -0.010077204555273056,
+      -0.002381647238507867
+    ]
+  ],
+  "head_bias": [
+    0.036994725465774536
+  ],
+  "notes": [
+    "Parameters exported from the verified 2026-08-28 Raspberry Pi 5 FITS edge checkpoint.",
+    "Runtime equation is the same FITS-inspired residual rFFT + linear head used by edge_forecasting.py.",
+    "This lightweight artifact removes the need to install PyTorch/CUDA packages on the production gateway."
+  ]
+}

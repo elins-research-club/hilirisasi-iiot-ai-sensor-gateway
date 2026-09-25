@@ -11,7 +11,6 @@ fi
 
 SHA="$(git rev-parse HEAD)"
 RELEASE_ID="$(printf '%.12s' "$SHA")"
-MODEL_SRC="$ROOT/models/pi5/data_co2/fits/model.pt"
 MANIFEST_REL="deployment/model-manifests/co2_fits_pi5_20260828.json"
 if [[ $# -gt 0 ]]; then
   STAGE="$1"
@@ -23,26 +22,28 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE"
 git archive HEAD | tar -x -C "$STAGE"
 
-mkdir -p "$STAGE/deployment/models"
-cp "$MODEL_SRC" "$STAGE/deployment/models/co2_fits_pi5_20260828.pt"
-
 python3 - "$STAGE" "$MANIFEST_REL" <<'PY'
 import hashlib, json, pathlib, sys
 stage = pathlib.Path(sys.argv[1])
 manifest = json.loads((stage / sys.argv[2]).read_text())
-model = stage / manifest["model_path"]
-digest = hashlib.sha256(model.read_bytes()).hexdigest()
-if digest != manifest["model_sha256"]:
-    raise SystemExit(f"model sha mismatch: {digest} != {manifest['model_sha256']}")
+artifact = stage / manifest["runtime_artifact_path"]
+digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+if digest != manifest["runtime_artifact_sha256"]:
+    raise SystemExit(
+        f"runtime artifact sha mismatch: {digest} != "
+        f"{manifest['runtime_artifact_sha256']}"
+    )
 release = {
     "schema": "iiot.ai_sensor.release_model_check.v1",
     "model_manifest": sys.argv[2],
-    "model_sha256": digest,
+    "runtime_artifact_sha256": digest,
+    "source_checkpoint_sha256": manifest["source_checkpoint_sha256"],
+    "runtime_backend": manifest["runtime_backend"],
 }
 (stage / "deployment" / "RELEASE_MODEL_CHECK.json").write_text(
     json.dumps(release, indent=2)
 )
-print(f"MODEL_SHA256={digest}")
+print(f"RUNTIME_ARTIFACT_SHA256={digest}")
 PY
 
 cat > "$STAGE/deployment/RELEASE.txt" <<EOF

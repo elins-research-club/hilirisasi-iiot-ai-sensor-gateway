@@ -31,9 +31,10 @@ Runtime baru tidak mengedit `lora_pkt_fwd`, konfigurasi radio, protected
 ```
 
 Release berasal dari `git archive`, bukan rsync workspace mentah. Dataset,
-model eksperimen, `.pio`, cache, dan credential tidak ikut. Hanya model CO2
-yang dipilih untuk shadow test yang ditambahkan ke bundle setelah SHA-256
-diverifikasi terhadap manifest.
+model eksperimen, `.pio`, cache, dan credential tidak ikut. Runtime hanya
+membawa artifact FITS NumPy kecil yang diekspor dari checkpoint CO2 terverifikasi
+dan SHA-256-nya dikunci di manifest. Source checkpoint PyTorch tetap disimpan
+sebagai evidence/training artifact di workspace, tetapi tidak dipasang ke gateway.
 
 ## Build + Deploy
 
@@ -48,11 +49,11 @@ Script:
 
 1. menolak tracked dirty worktree;
 2. membuat versioned release dari Git HEAD;
-3. menambahkan selected CO2 model saja;
-4. memverifikasi hash model;
+3. memverifikasi selected CO2 NumPy runtime artifact;
+4. mempertahankan provenance hash source checkpoint;
 5. upload ke release directory baru;
 6. membuat venv terpisah;
-7. install `.[mqtt,ml]`;
+7. install `.[mqtt,edge]` (Paho + NumPy; tanpa PyTorch/CUDA);
 8. menjalankan compile + full unit tests + config check di Pi;
 9. baru mengubah symlink `current`.
 
@@ -117,6 +118,11 @@ Forecast memakai manifest
 `deployment/model-manifests/co2_fits_pi5_20260828.json`, memverifikasi hash,
 window 16, cadence 60 s, dan target CO2. Cadence/feature/hash mismatch membuat
 runtime abstain; model tidak boleh dipaksa.
+
+Runtime inference menggunakan NumPy rFFT + linear head yang ekuivalen dengan
+FITS edge checkpoint. Parity test pada host membandingkan export terhadap
+checkpoint PyTorch asli; ini sengaja menghindari instalasi ratusan MB PyTorch
+serta CUDA toolkit yang tidak relevan pada Raspberry Pi CPU.
 
 ## Service Lifecycle
 
