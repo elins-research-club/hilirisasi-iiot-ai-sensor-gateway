@@ -9,6 +9,7 @@ Dokumen ini adalah sumber kontrak aktif firmware, receiver/parser Python, prepro
 | `compact_sensor.v1` | legacy/proxy reference | migration-only, dapat disabled |
 | `compact_sensor.v2` | legacy node-preprocessed observation | compatibility aktif, semantics tidak berubah |
 | `compact_sensor.v3` | hardware observation sebelum semantic preprocessing gateway | contract aktif firmware |
+| `chirpstack_live.v1` | source envelope live dari ChirpStack v4 untuk node yang belum memakai compact v3 | integration contract; bukan firmware contract |
 
 Perubahan v2 → v3 adalah perubahan makna sehingga wajib version bump. V2 tidak boleh diam-diam diartikan sebagai raw/hardware observation.
 
@@ -151,6 +152,7 @@ calibration_version
 hardware_summary
 preprocessing_version
 source_event_id
+source_contract/source_session_id/source_metadata
 sensor
 ```
 
@@ -233,6 +235,52 @@ Payload membawa:
 - deployment config version.
 
 AI harus abstain bila source invalid/stale/unavailable atau model/data gate tidak layak. Drift tidak otomatis berarti kondisi lingkungan bahaya.
+
+### 9.1 Batas origin `sensor_ai.v1`
+
+`sensor_ai.v1` hanya untuk origin `compact_sensor.v1/v2/v3`. Builder sekarang
+fail-closed bila dipanggil dengan source non-compact. Ini sengaja untuk mencegah
+current ChirpStack uplink diberi `compact_version`, boot ID, firmware, config,
+atau calibration metadata yang sebenarnya tidak tersedia.
+
+## 9A. `chirpstack_live.v1` dan `sensor_ai.v2`
+
+Deployment current `iiotgw` menerima uplink ChirpStack v4 dari:
+
+```text
+application/{application_id}/device/{dev_eui}/event/up
+```
+
+`chirpstack_live.v1` mempertahankan:
+
+- DevEUI sebagai node identity;
+- DevAddr sebagai transport/session identity, **bukan firmware boot ID**;
+- fCnt sebagai sequence;
+- deduplicationId, fPort, device/application metadata;
+- event/receive timestamp;
+- RSSI/SNR dari `rxInfo`;
+- payload format;
+- raw source metadata yang belum aman dipromosikan ke canonical sensor.
+
+Current Node 2 `extra_raw_u16` tetap source metadata. Current Node 1 field
+`no2` juga dipertahankan sebagai `no2_source_unmapped` sampai unit/semantic
+hardware dikonfirmasi; ia tidak diam-diam diubah menjadi `no2_ratio` atau ppm.
+
+`sensor_ai.v2` adalah source-agnostic event untuk integration lane tersebut.
+Perbedaan utama terhadap v1:
+
+```text
+source.contract
+source.source_event_id
+source.session_id
+source.sequence
+source.metadata
+deployment.runtime_mode
+deployment.model_manifest_id
+```
+
+Dengan demikian compact origin lama tetap kompatibel sementara live ChirpStack
+dapat membawa provenance yang jujur.
 
 ## 10. `sensor_status.v1`
 

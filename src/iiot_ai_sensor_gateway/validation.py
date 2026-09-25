@@ -114,10 +114,11 @@ class ReadingValidator:
             issues.append("legacy_contract_v1")
 
         node_identity = (reading.gateway_id, reading.node_id)
+        cycle_id = reading.state_cycle_id
         previous_boot = self.state.last_boot.get(node_identity)
-        if previous_boot is not None and previous_boot != reading.boot_id:
+        if previous_boot is not None and previous_boot != cycle_id:
             issues.append("node_reboot")
-        sequence_key = (reading.gateway_id, reading.node_id, reading.boot_id)
+        sequence_key = (reading.gateway_id, reading.node_id, cycle_id)
         previous = self.state.last_sequence.get(sequence_key)
         sequence_issue: str | None = None
         if previous is not None:
@@ -139,7 +140,7 @@ class ReadingValidator:
                 self.state.last_sequence, sequence_key, reading.sequence, self.state_max_entries
             )
             _remember_bounded(
-                self.state.last_boot, node_identity, reading.boot_id, self.state_max_entries
+                self.state.last_boot, node_identity, cycle_id, self.state_max_entries
             )
             _remember_bounded(
                 self.state.seen_event_ids, reading.event_id, None, self.state_max_entries

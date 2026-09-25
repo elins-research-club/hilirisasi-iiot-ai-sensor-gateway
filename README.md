@@ -9,7 +9,7 @@ sensor RAB
 → Raspberry Pi: raw durability + parser + semantic preprocessing
 → resampling + features + observable normalization + windowing
 → baseline/model/anomaly/drift/decision
-→ sensor_ai.v1 dan sensor_status.v1 untuk MQTT/backend
+→ sensor_ai.v1 (compact origin) / sensor_ai.v2 (source-agnostic live) + sensor_status.v1
 ```
 
 Python tidak berjalan di ESP32-C6. Firmware berada di `firmware/esp32-c6-sensor-node`; gateway Python berada di `src/iiot_ai_sensor_gateway`.
@@ -74,6 +74,7 @@ Schema:
 - `schemas/compact_sensor.v3.schema.json` — aktif;
 - `schemas/compact_sensor.v2.schema.json` — compatibility;
 - `schemas/sensor_ai.v1.schema.json`;
+- `schemas/sensor_ai.v2.schema.json` — source-agnostic event untuk live source seperti ChirpStack;
 - `schemas/sensor_status.v1.schema.json`.
 
 Detail: `docs/data-contract.md`.
@@ -126,6 +127,12 @@ $PY run_gateway.py receive-real-live \
   --port /dev/ttyUSB0 --baudrate 9600 --timeout 1.0 \
   --output-dir data/real_live_logs
 ```
+
+Jalur serial/replay lama **tetap dipertahankan**. Untuk deployment `iiotgw`
+current, source baru `ChirpStackMQTTSource` dan adapter
+`chirpstack_live.v1` disiapkan sebagai jalur paralel agar event
+`application/+/device/+/event/up` dapat diproses tanpa memalsukan
+`compact_sensor.v3`. Source baru tidak menghapus atau mengubah receiver serial lama.
 
 ## Firmware ESP32-C6
 
@@ -301,7 +308,12 @@ iot/{gateway_id}/data
 iot/{gateway_id}/status/sensor
 ```
 
-Data event non-retained; status retained. Bare status migration-only. Repo menyediakan schema/builder, belum broker/publisher/outbox/TLS/LWT sensor production E2E.
+Data event non-retained; status retained. Bare status migration-only.
+`sensor_ai.v1` tetap khusus origin compact v1/v2/v3. `sensor_ai.v2` menambahkan
+source contract/session/metadata generik untuk live integration seperti ChirpStack,
+sehingga runtime tidak perlu mengarang boot/firmware/calibration metadata compact.
+Publisher/outbox runtime production dibangun sebagai workstream deployment terpisah;
+schema/builder saja bukan bukti broker E2E.
 
 ## Verifikasi
 

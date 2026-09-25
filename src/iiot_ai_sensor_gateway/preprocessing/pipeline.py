@@ -53,7 +53,7 @@ class GatewaySemanticPreprocessor:
 
     def process(self, result: ValidationResult) -> ValidationResult:
         reading = result.reading
-        eligible = reading.compact_version == 3 or (
+        eligible = reading.compact_version == 3 or reading.source_contract == "chirpstack_live.v1" or (
             reading.compact_version == 2 and self.apply_to_v2
         )
         if not eligible:
@@ -72,7 +72,7 @@ class GatewaySemanticPreprocessor:
             field: self._filter(
                 reading.gateway_id,
                 reading.node_id,
-                reading.boot_id,
+                reading.state_cycle_id,
                 field,
             ).update(value)
             for field, value in values.items()

@@ -11,6 +11,7 @@ COMPACT_SCHEMA_V1 = "compact_sensor.v1"
 COMPACT_SCHEMA_V2 = "compact_sensor.v2"
 COMPACT_SCHEMA_V3 = "compact_sensor.v3"
 SENSOR_AI_SCHEMA_V1 = "sensor_ai.v1"
+SENSOR_AI_SCHEMA_V2 = "sensor_ai.v2"
 SENSOR_STATUS_SCHEMA_V1 = "sensor_status.v1"
 
 COMPACT_KEYS = {
@@ -148,7 +149,7 @@ class SensorReading:
     sequence: int
     boot_id: str
     event_id: str
-    compact_version: int
+    compact_version: int | None
     schema_version: str
     time_quality: str
     node_timestamp: Any
@@ -168,6 +169,9 @@ class SensorReading:
     hardware_summary: str = "unknown"
     preprocessing_version: str = "unprocessed"
     source_event_id: str | None = None
+    source_contract: str = "compact_sensor.unknown"
+    source_session_id: str | None = None
+    source_metadata: dict[str, Any] = field(default_factory=dict)
 
     def as_record(self) -> dict[str, Any]:
         return {
@@ -179,6 +183,8 @@ class SensorReading:
             "timestamp": self.timestamp.isoformat(),
             "source": {
                 "compact_version": self.compact_version,
+                "source_contract": self.source_contract,
+                "source_session_id": self.source_session_id,
                 "boot_id": self.boot_id,
                 "sequence": self.sequence,
                 "node_timestamp": self.node_timestamp,
@@ -194,6 +200,7 @@ class SensorReading:
                 "preprocessing_version": self.preprocessing_version,
                 "source_event_id": self.source_event_id or self.event_id,
                 "radio": self.radio.as_dict(),
+                "metadata": dict(self.source_metadata),
             },
             "status": self.status,
             "quality": self.quality,
@@ -201,6 +208,17 @@ class SensorReading:
             "sensor_status": dict(self.sensor_status),
             "sensor": self.sensor.as_dict(),
         }
+
+    @property
+    def state_cycle_id(self) -> str:
+        """Identity cycle for stateful validation/preprocessing.
+
+        Compact payloads use their real firmware boot_id. Sources without a
+        firmware boot identifier (for example ChirpStack uplinks) use an
+        explicit transport/session identity instead of fabricating a boot ID.
+        """
+
+        return self.source_session_id or self.boot_id
 
 
 @dataclass(frozen=True)

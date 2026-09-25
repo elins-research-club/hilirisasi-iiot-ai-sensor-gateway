@@ -209,4 +209,6 @@ class PayloadParser:
             hardware_summary=str(data.get("hs", data.get("st", "unknown"))),
             preprocessing_version="unprocessed",
             source_event_id=event_id,
+            source_contract=f"compact_sensor.v{compact_version}",
+            source_session_id=boot_id,
         )
