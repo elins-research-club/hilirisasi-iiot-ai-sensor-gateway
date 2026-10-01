@@ -1,0 +1,79 @@
+name: Mirror to ERC
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: erc-mirror-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: github.repository == 'greyghstt/IIOT-AI-Sensor-Gateway'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SOURCE_REPO: greyghstt/IIOT-AI-Sensor-Gateway
+      TARGET_REPO: elins-research-club/hilirisasi-iiot-ai-sensor-gateway
+
+    steps:
+      - name: Prepare SSH authentication
+        shell: bash
+        env:
+          ERC_MIRROR_SSH_KEY: ${{ secrets.ERC_MIRROR_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${ERC_MIRROR_SSH_KEY}"
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "${ERC_MIRROR_SSH_KEY}" > "$HOME/.ssh/erc_mirror"
+          printf '%s\n' \
+            'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' \
+            > "$HOME/.ssh/known_hosts"
+
+      - name: Mirror branches and tags
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm -rf mirror.git source.refs target.refs
+
+          git clone --bare \
+            "https://x-access-token:${GH_TOKEN}@github.com/${SOURCE_REPO}.git" \
+            mirror.git
+
+          git -C mirror.git remote add erc \
+            "git@github.com:${TARGET_REPO}.git"
+
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/erc_mirror -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts"
+
+          git -C mirror.git push --prune erc \
+            'refs/heads/*:refs/heads/*' \
+            'refs/tags/*:refs/tags/*'
+
+          git -C mirror.git for-each-ref \
+            --format='%(objectname)%09%(refname)' \
+            refs/heads refs/tags | sort > source.refs
+
+          git ls-remote --refs --heads --tags \
+            "git@github.com:${TARGET_REPO}.git" | sort > target.refs
+
+          diff -u source.refs target.refs
+
+      - name: Mirror verification summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'Source: %s\n' "${SOURCE_REPO}"
+          printf 'Target: %s\n' "${TARGET_REPO}"
+          printf 'Verified refs: %s\n' "$(wc -l < source.refs)"
+          echo 'MIRROR_GATE=PASS'
