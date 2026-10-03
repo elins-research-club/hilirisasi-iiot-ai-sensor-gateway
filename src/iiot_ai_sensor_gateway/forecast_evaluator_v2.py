@@ -347,13 +347,32 @@ def _rolling_origin_manifest(
             if val_end <= val_start or train_end < 2:
                 usable = False
                 break
+            train_samples = pool[:train_end]
+            train_label_end = max(
+                _parse_dt(sample.label_timestamps[-1]) for sample in train_samples
+            )
+            validation_samples = [
+                sample
+                for sample in pool[val_start:val_end]
+                if _parse_dt(sample.input_start_timestamp) > train_label_end
+            ]
+            if not validation_samples:
+                usable = False
+                break
             fold_groups[group_id] = {
-                "train_start": pool[0].anchor_timestamp,
-                "train_end": pool[train_end - 1].anchor_timestamp,
-                "validation_start": pool[val_start].anchor_timestamp,
-                "validation_end": pool[val_end - 1].anchor_timestamp,
-                "train_samples": train_end,
-                "validation_samples": val_end - val_start,
+                "train_start": train_samples[0].anchor_timestamp,
+                "train_end": train_samples[-1].anchor_timestamp,
+                "train_label_end": max(
+                    sample.label_timestamps[-1] for sample in train_samples
+                ),
+                "validation_start": validation_samples[0].anchor_timestamp,
+                "validation_end": validation_samples[-1].anchor_timestamp,
+                "validation_input_start": min(
+                    sample.input_start_timestamp for sample in validation_samples
+                ),
+                "train_samples": len(train_samples),
+                "validation_samples": len(validation_samples),
+                "input_label_overlap_blocked": True,
             }
         if usable and fold_groups:
             output.append({"fold": fold + 1, "groups": fold_groups})
@@ -482,6 +501,9 @@ def build_forecast_dataset_v2(
         arrays[f"X_{split}"] = np.stack([sample.x for sample in samples]).astype(np.float32)
         arrays[f"Y_{split}"] = np.stack([sample.y for sample in samples]).astype(np.float32)
         arrays[f"group_id_{split}"] = np.asarray([sample.group_id for sample in samples])
+        arrays[f"input_start_timestamp_{split}"] = np.asarray(
+            [sample.input_start_timestamp for sample in samples]
+        )
         arrays[f"anchor_timestamp_{split}"] = np.asarray(
             [sample.anchor_timestamp for sample in samples]
         )

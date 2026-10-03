@@ -12,6 +12,7 @@ from typing import Any
 
 from .forecast_evaluator_v2 import (
     METRICS_SCHEMA,
+    baseline_candidates_v2,
     calibrate_conformal_radius_v2,
     compose_selected_baseline_v2,
     evaluate_baselines_v2,
@@ -787,6 +788,432 @@ def evaluate_local_forecast_v2(
     return result
 
 
+def _iso_epoch(value: Any) -> float:
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+
+
+def _development_pool(data: dict[str, Any]) -> dict[str, Any]:
+    np = _np()
+    fields = (
+        "X",
+        "Y",
+        "group_id",
+        "input_start_timestamp",
+        "anchor_timestamp",
+        "label_timestamps",
+        "seasonal_baseline",
+        "seasonal_available",
+    )
+    return {
+        field: np.concatenate(
+            [data[f"{field}_train"], data[f"{field}_val"]], axis=0
+        )
+        for field in fields
+    }
+
+
+def _indices_for_group_range(
+    pool: dict[str, Any],
+    *,
+    group_id: str,
+    start: str,
+    end: str,
+) -> list[int]:
+    start_epoch = _iso_epoch(start)
+    end_epoch = _iso_epoch(end)
+    return [
+        index
+        for index, (group, timestamp) in enumerate(
+            zip(pool["group_id"], pool["anchor_timestamp"])
+        )
+        if str(group) == group_id and start_epoch <= _iso_epoch(timestamp) <= end_epoch
+    ]
+
+
+def _inner_train_validation_indices(
+    pool: dict[str, Any],
+    outer_train_indices: list[int],
+    *,
+    validation_fraction: float = 0.15,
+) -> tuple[list[int], list[int]]:
+    if not 0.0 < validation_fraction < 0.5:
+        raise ValueError("inner validation_fraction must be in (0,0.5)")
+    by_group: dict[str, list[int]] = {}
+    for index in outer_train_indices:
+        by_group.setdefault(str(pool["group_id"][index]), []).append(index)
+    train_indices: list[int] = []
+    validation_indices: list[int] = []
+    for group_id, indices in sorted(by_group.items()):
+        ordered = sorted(indices, key=lambda index: _iso_epoch(pool["anchor_timestamp"][index]))
+        if len(ordered) < 6:
+            raise ValueError(
+                f"rolling-origin group {group_id} needs at least 6 training samples for inner validation"
+            )
+        requested_split = max(
+            2,
+            min(
+                len(ordered) - 1,
+                int(math.floor(len(ordered) * (1.0 - validation_fraction))),
+            ),
+        )
+        minimum_train = max(2, len(ordered) // 2)
+        inner_train: list[int] = []
+        inner_validation: list[int] = []
+        for split_at in range(requested_split, minimum_train - 1, -1):
+            candidate_train = ordered[:split_at]
+            train_label_end = max(
+                _iso_epoch(timestamp)
+                for index in candidate_train
+                for timestamp in pool["label_timestamps"][index]
+            )
+            candidate_validation = [
+                index
+                for index in ordered[split_at:]
+                if _iso_epoch(pool["input_start_timestamp"][index]) > train_label_end
+            ]
+            if candidate_validation:
+                inner_train = candidate_train
+                inner_validation = candidate_validation
+                break
+        if not inner_validation:
+            raise ValueError(
+                f"rolling-origin group {group_id} has no leakage-safe inner validation samples"
+            )
+        train_indices.extend(inner_train)
+        validation_indices.extend(inner_validation)
+    return train_indices, validation_indices
+
+
+def _fold_mase_scale(
+    pool: dict[str, Any],
+    train_indices: list[int],
+    *,
+    target_count: int,
+    cadence_seconds: float,
+    lag: int,
+    tolerance_seconds: float,
+) -> Any:
+    np = _np()
+    by_group: dict[str, dict[str, Any]] = {}
+    for index in train_indices:
+        group = str(pool["group_id"][index])
+        points = by_group.setdefault(group, {})
+        for timestamp, row in zip(pool["label_timestamps"][index], pool["Y"][index]):
+            points[str(timestamp)] = np.asarray(row, dtype=np.float64)
+    deltas = []
+    for points in by_group.values():
+        ordered = sorted(
+            ((_iso_epoch(timestamp), row) for timestamp, row in points.items()),
+            key=lambda item: item[0],
+        )
+        for index in range(lag, len(ordered)):
+            previous_time, previous = ordered[index - lag]
+            current_time, current = ordered[index]
+            expected = cadence_seconds * lag
+            if abs((current_time - previous_time) - expected) > tolerance_seconds:
+                continue
+            deltas.append(np.abs(current - previous))
+    if not deltas:
+        return np.full((target_count,), np.nan, dtype=np.float64)
+    return np.mean(np.stack(deltas, axis=0), axis=0)
+
+
+def _candidate_selection(
+    actual: Any,
+    candidates: dict[str, dict[str, Any]],
+    target_names: tuple[str, ...],
+) -> dict[str, dict[str, str]]:
+    np = _np()
+    usable = {
+        name: item["predictions"]
+        for name, item in candidates.items()
+        if item.get("applicable") and item.get("predictions") is not None
+    }
+    if not usable:
+        raise ValueError("rolling-origin fold has no applicable baseline")
+    selected: dict[str, dict[str, str]] = {}
+    for horizon in range(actual.shape[1]):
+        selected[str(horizon + 1)] = {}
+        for target_index, target_name in enumerate(target_names):
+            selected[str(horizon + 1)][target_name] = min(
+                usable,
+                key=lambda name: float(
+                    np.sqrt(
+                        np.mean(
+                            (
+                                usable[name][:, horizon, target_index]
+                                - actual[:, horizon, target_index]
+                            )
+                            ** 2
+                        )
+                    )
+                ),
+            )
+    return selected
+
+
+def _compose_candidates(
+    candidates: dict[str, dict[str, Any]],
+    selection: dict[str, dict[str, str]],
+    target_names: tuple[str, ...],
+    shape: tuple[int, ...],
+) -> Any:
+    np = _np()
+    output = np.empty(shape, dtype=np.float64)
+    for horizon in range(shape[1]):
+        for target_index, target_name in enumerate(target_names):
+            name = selection[str(horizon + 1)][target_name]
+            item = candidates.get(name)
+            if not item or not item.get("applicable") or item.get("predictions") is None:
+                raise ValueError(f"rolling-origin selected baseline {name} became unavailable")
+            output[:, horizon, target_index] = item["predictions"][:, horizon, target_index]
+    return output
+
+
+def _fold_baseline_data(
+    pool: dict[str, Any],
+    indices: list[int],
+    target_indices: Any,
+    target_names: tuple[str, ...],
+) -> dict[str, Any]:
+    np = _np()
+    take = np.asarray(indices, dtype=np.int64)
+    return {
+        "X_fold": pool["X"][take],
+        "Y_fold": pool["Y"][take],
+        "target_indices": np.asarray(target_indices, dtype=np.int64),
+        "target_names_tuple": target_names,
+        "seasonal_baseline_fold": pool["seasonal_baseline"][take],
+        "seasonal_available_fold": pool["seasonal_available"][take],
+    }
+
+
+def _fit_predict_fold_model(
+    model_type: str,
+    *,
+    train_x: Any,
+    train_y: Any,
+    inner_val_x: Any,
+    inner_val_y: Any,
+    outer_val_x: Any,
+    target_indices: Any,
+    seed: int,
+    tsmixer_epochs: int,
+    device: str,
+) -> Any:
+    np = _np()
+    if model_type == "ridge":
+        state = _ridge_fit(
+            train_x.reshape(train_x.shape[0], -1),
+            _flatten_y(train_y),
+            alpha=1e-3,
+        )
+        return _linear_predict(
+            state, outer_val_x.reshape(outer_val_x.shape[0], -1)
+        ).reshape((outer_val_x.shape[0],) + train_y.shape[1:])
+    if model_type == "elasticnet":
+        state = _elasticnet_fit(
+            train_x.reshape(train_x.shape[0], -1),
+            _flatten_y(train_y),
+            alpha=1e-3,
+            l1_ratio=0.5,
+            max_iter=1000,
+            tolerance=1e-7,
+        )
+        return _linear_predict(
+            state, outer_val_x.reshape(outer_val_x.shape[0], -1)
+        ).reshape((outer_val_x.shape[0],) + train_y.shape[1:])
+    if model_type == "nlinear":
+        state = _nlinear_fit(train_x, train_y, target_indices, alpha=1e-3)
+        return _nlinear_predict(state, outer_val_x, target_indices)
+    if model_type != "tsmixer_lite":
+        raise ValueError(f"unsupported rolling-origin model_type: {model_type}")
+    fold_data = {
+        "X_train": train_x.astype("float32"),
+        "Y_train": train_y.astype("float32"),
+        "X_val": inner_val_x.astype("float32"),
+        "Y_val": inner_val_y.astype("float32"),
+        "target_indices": np.asarray(target_indices, dtype=np.int64),
+    }
+    model, details = _fit_tsmixer(
+        fold_data,
+        epochs=tsmixer_epochs,
+        batch_size=64,
+        learning_rate=1e-3,
+        patience=max(2, min(8, tsmixer_epochs // 2 or 2)),
+        seed=seed,
+        device=device,
+        blocks=2,
+        time_hidden=32,
+        feature_hidden=32,
+        dropout=0.1,
+        weight_decay=1e-4,
+        grad_clip_norm=1.0,
+    )
+    return _predict_tsmixer(
+        model,
+        outer_val_x.astype("float32"),
+        device=details["device"],
+        batch_size=1024,
+    )
+
+
+def evaluate_rolling_origin_local_v2(
+    dataset_npz: str | Path,
+    *,
+    model_type: str,
+    seeds: tuple[int, ...] = (17, 42, 73),
+    tsmixer_epochs: int = 30,
+    device: str = "auto",
+) -> dict[str, Any]:
+    """Evaluate development-region rolling origins without touching final test."""
+
+    if model_type not in MODEL_TYPES:
+        raise ValueError(f"model_type must be one of {MODEL_TYPES}")
+    data = load_forecast_dataset_v2(dataset_npz)
+    fold_manifest = data["meta"].get("rolling_origin_folds") or []
+    if not fold_manifest:
+        raise ValueError("dataset has no usable rolling_origin_folds")
+    pool = _development_pool(data)
+    np = _np()
+    target_names = data["target_names_tuple"]
+    target_indices = data["target_indices"]
+    cadence_seconds = float(data["cadence_seconds"][0])
+    tolerance_seconds = float(
+        data["meta"].get("cadence_diagnostics", {}).get(
+            "tolerance_seconds", max(1.0, cadence_seconds * 0.10)
+        )
+    )
+    mase_lag = int(data["meta"].get("mase_lag", 1))
+    effective_seeds = seeds if model_type == "tsmixer_lite" else (seeds[0],)
+    runs: list[dict[str, Any]] = []
+    for fold in fold_manifest:
+        outer_train_indices: list[int] = []
+        outer_validation_indices: list[int] = []
+        for group_id, ranges in sorted(fold["groups"].items()):
+            outer_train_indices.extend(
+                _indices_for_group_range(
+                    pool,
+                    group_id=group_id,
+                    start=ranges["train_start"],
+                    end=ranges["train_end"],
+                )
+            )
+            outer_validation_indices.extend(
+                _indices_for_group_range(
+                    pool,
+                    group_id=group_id,
+                    start=ranges["validation_start"],
+                    end=ranges["validation_end"],
+                )
+            )
+        if not outer_train_indices or not outer_validation_indices:
+            raise ValueError(f"rolling fold {fold['fold']} resolved to an empty split")
+        inner_train_indices, inner_validation_indices = _inner_train_validation_indices(
+            pool, outer_train_indices
+        )
+        train_take = np.asarray(inner_train_indices, dtype=np.int64)
+        inner_val_take = np.asarray(inner_validation_indices, dtype=np.int64)
+        outer_val_take = np.asarray(outer_validation_indices, dtype=np.int64)
+        mase_scale = _fold_mase_scale(
+            pool,
+            inner_train_indices,
+            target_count=len(target_names),
+            cadence_seconds=cadence_seconds,
+            lag=mase_lag,
+            tolerance_seconds=tolerance_seconds,
+        )
+        inner_baseline_data = _fold_baseline_data(
+            pool, inner_validation_indices, target_indices, target_names
+        )
+        inner_candidates = baseline_candidates_v2(inner_baseline_data, "fold")
+        baseline_selection = _candidate_selection(
+            inner_baseline_data["Y_fold"], inner_candidates, target_names
+        )
+        outer_baseline_data = _fold_baseline_data(
+            pool, outer_validation_indices, target_indices, target_names
+        )
+        outer_candidates = baseline_candidates_v2(outer_baseline_data, "fold")
+        baseline_prediction = _compose_candidates(
+            outer_candidates,
+            baseline_selection,
+            target_names,
+            outer_baseline_data["Y_fold"].shape,
+        )
+        baseline_metrics = regression_metrics_v2(
+            outer_baseline_data["Y_fold"],
+            baseline_prediction,
+            target_names,
+            mase_scale,
+            data["meta"].get("normalization_ranges", {}),
+        )
+        for seed in effective_seeds:
+            prediction = _fit_predict_fold_model(
+                model_type,
+                train_x=pool["X"][train_take],
+                train_y=pool["Y"][train_take],
+                inner_val_x=pool["X"][inner_val_take],
+                inner_val_y=pool["Y"][inner_val_take],
+                outer_val_x=pool["X"][outer_val_take],
+                target_indices=target_indices,
+                seed=seed,
+                tsmixer_epochs=tsmixer_epochs,
+                device=device,
+            )
+            metrics = regression_metrics_v2(
+                pool["Y"][outer_val_take],
+                prediction,
+                target_names,
+                mase_scale,
+                data["meta"].get("normalization_ranges", {}),
+            )
+            delta = _baseline_delta(metrics, baseline_metrics)
+            runs.append(
+                {
+                    "fold": int(fold["fold"]),
+                    "seed": seed,
+                    "inner_train_samples": len(inner_train_indices),
+                    "inner_validation_samples": len(inner_validation_indices),
+                    "outer_validation_samples": len(outer_validation_indices),
+                    "baseline_selection": baseline_selection,
+                    "rmse": metrics["overall_rmse"],
+                    "mase": metrics["overall_mase"],
+                    "rmse_skill_score": delta["overall_rmse_skill_score"],
+                    "prediction_out_of_range_fraction": metrics[
+                        "prediction_range_diagnostics"
+                    ]["overall_out_of_range_fraction"],
+                }
+            )
+    rmse_values = np.asarray([run["rmse"] for run in runs], dtype=np.float64)
+    skill_values = np.asarray(
+        [
+            run["rmse_skill_score"]
+            for run in runs
+            if run["rmse_skill_score"] is not None
+        ],
+        dtype=np.float64,
+    )
+    return {
+        "schema": "iiot.ai_sensor.rolling_origin_evaluation.v1",
+        "dataset": str(dataset_npz),
+        "model_type": model_type,
+        "final_test_touched": False,
+        "fold_count": len(fold_manifest),
+        "seeds": list(effective_seeds),
+        "runs": runs,
+        "aggregate": {
+            "rmse_mean": float(np.mean(rmse_values)),
+            "rmse_median": float(np.median(rmse_values)),
+            "rmse_std": float(np.std(rmse_values)),
+            "rmse_worst": float(np.max(rmse_values)),
+            "skill_mean": None if not skill_values.size else float(np.mean(skill_values)),
+            "skill_median": None if not skill_values.size else float(np.median(skill_values)),
+            "skill_std": None if not skill_values.size else float(np.std(skill_values)),
+            "skill_worst": None if not skill_values.size else float(np.min(skill_values)),
+        },
+    }
+
+
 def run_local_bakeoff_v2(
     dataset_npz: str | Path,
     output_dir: str | Path,
@@ -795,6 +1222,7 @@ def run_local_bakeoff_v2(
     seeds: tuple[int, ...] = (17, 42, 73),
     tsmixer_epochs: int = 30,
     device: str = "auto",
+    rolling_origin: bool = True,
 ) -> dict[str, Any]:
     """Repeated-seed host bakeoff; never promotes a model to production."""
 
@@ -841,7 +1269,7 @@ def run_local_bakeoff_v2(
     for model_type in model_types:
         items = [item for item in runs if item["model_type"] == model_type]
         rmse = np.asarray([item["test_rmse"] for item in items], dtype=np.float64)
-        grouped[model_type] = {
+        model_summary: dict[str, Any] = {
             "runs": len(items),
             "test_rmse_mean": float(np.mean(rmse)),
             "test_rmse_std": float(np.std(rmse)),
@@ -849,13 +1277,25 @@ def run_local_bakeoff_v2(
                 item["promotion_status"] == "PROMISING_HOST_ONLY" for item in items
             ),
         }
+        if rolling_origin:
+            model_summary["rolling_origin"] = evaluate_rolling_origin_local_v2(
+                dataset_npz,
+                model_type=model_type,
+                seeds=seeds,
+                tsmixer_epochs=tsmixer_epochs,
+                device=device,
+            )
+        grouped[model_type] = model_summary
     summary = {
         "schema": "iiot.ai_sensor.local_forecast_bakeoff.v2",
         "dataset": str(dataset_npz),
         "seeds": list(seeds),
         "runs": runs,
         "models": grouped,
-        "selection_policy": "no production winner; compare host evidence only",
+        "selection_policy": (
+            "no production winner; final test is reported separately while rolling-origin "
+            "development evidence is used to assess stability"
+        ),
     }
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     return summary

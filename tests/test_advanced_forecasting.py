@@ -10,6 +10,7 @@ import numpy as np
 
 from iiot_ai_sensor_gateway.advanced_forecasting import (
     MODEL_SCHEMA,
+    evaluate_rolling_origin_local_v2,
     evaluate_local_forecast_v2,
     predict_local_forecast_v2,
     train_local_forecast_v2,
@@ -155,6 +156,23 @@ class AdvancedForecastingTests(unittest.TestCase):
                 handle.write(b"tamper")
             with self.assertRaisesRegex(ValueError, "sha256 mismatch"):
                 predict_local_forecast_v2(dataset, output / "model.json", split="test")
+
+    def test_rolling_origin_uses_development_region_without_touching_final_test(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = _build_dataset(root)
+            result = evaluate_rolling_origin_local_v2(
+                dataset,
+                model_type="ridge",
+                seeds=(17,),
+                tsmixer_epochs=2,
+                device="cpu",
+            )
+            self.assertFalse(result["final_test_touched"])
+            self.assertGreaterEqual(result["fold_count"], 1)
+            self.assertEqual(len(result["runs"]), result["fold_count"])
+            self.assertIn("rmse_mean", result["aggregate"])
+            self.assertIn("rmse_worst", result["aggregate"])
 
 
 if __name__ == "__main__":
