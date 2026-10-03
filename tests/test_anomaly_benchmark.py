@@ -92,6 +92,10 @@ class AnomalyBenchmarkTests(unittest.TestCase):
             )
             self.assertEqual(result["truth_event_count"], 1)
             self.assertIn(result["status"], {"EXPERIMENTAL_FIXTURE_OR_LABEL_DEPENDENT"})
+            self.assertIn("point_metrics", result)
+            self.assertIn("injected_feature_shift", result["point_metrics"]["by_truth_kind"])
+            self.assertIn("injected_feature_shift", result["event_by_truth_kind"])
+            self.assertGreater(result["point_metrics"]["evaluated_points"], 0)
             self.assertTrue(benchmark.exists())
             label_data = json.loads(labels.read_text(encoding="utf-8"))
             self.assertIsNone(label_data["production_accuracy_claim"])
@@ -101,6 +105,46 @@ class AnomalyBenchmarkTests(unittest.TestCase):
             intervals_from_boolean_records(
                 [{"timestamp": "2026-01-01T00:00:00", "is_anomaly": True}]
             )
+
+    def test_point_metrics_report_warmup_false_positive(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            labels = root / "labels.json"
+            detections = root / "detections.jsonl"
+            output = root / "benchmark.json"
+            start = datetime(2026, 1, 1, tzinfo=UTC)
+            labels.write_text(
+                json.dumps(
+                    {
+                        "schema": "iiot.ai_sensor.anomaly_labels.v1",
+                        "events": [
+                            {
+                                "event_id": "truth-1",
+                                "start": (start + timedelta(minutes=2)).isoformat(),
+                                "end": (start + timedelta(minutes=3)).isoformat(),
+                                "kind": "shift",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rows = [
+                {
+                    "timestamp": (start + timedelta(minutes=index)).isoformat(),
+                    "warmup_complete": index > 0,
+                    "is_anomaly": index in {0, 2},
+                }
+                for index in range(5)
+            ]
+            detections.write_text(
+                "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+            )
+            result = benchmark_detection_file(detections, labels, output)
+            self.assertEqual(result["point_metrics"]["warmup_false_positive_points"], 1)
+            self.assertEqual(result["point_metrics"]["true_positive_points"], 1)
+            self.assertEqual(result["point_metrics"]["false_positive_points"], 1)
+            self.assertEqual(result["point_metrics"]["by_truth_kind"]["shift"]["truth_points"], 2)
 
 
 if __name__ == "__main__":

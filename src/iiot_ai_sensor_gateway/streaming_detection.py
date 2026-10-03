@@ -63,6 +63,11 @@ class NativeRobustAnomaly:
         return self
 
 
+# Explicit semantic name for new code. Keep the historical class name as a
+# compatibility alias because older tests/checkpoints/docs import it directly.
+NativeOnlineZScoreAnomaly = NativeRobustAnomaly
+
+
 class RollingMADAnomaly:
     """Robust score-before-learn anomaly model using rolling median and MAD.
 
@@ -356,7 +361,7 @@ def build_native_pipeline(
 ) -> StreamingDetectionPipeline:
     if not feature_names:
         raise ValueError("feature_names must not be empty")
-    model = NativeRobustAnomaly(z_scale=z_scale)
+    model = NativeOnlineZScoreAnomaly(z_scale=z_scale)
     detectors = {
         name: NativePageHinkley(
             delta=page_hinkley_delta,

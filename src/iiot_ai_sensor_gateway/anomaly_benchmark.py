@@ -224,6 +224,104 @@ def benchmark_events(
     }
 
 
+def _contains(interval: EventInterval, timestamp: datetime) -> bool:
+    return interval.start <= timestamp <= interval.end
+
+
+def _point_metrics(
+    records: list[dict[str, Any]],
+    truth: list[EventInterval],
+) -> dict[str, Any]:
+    true_positive = false_positive = false_negative = true_negative = 0
+    warmup_false_positive = 0
+    by_kind: dict[str, dict[str, int]] = {}
+    evaluated = 0
+    for record in records:
+        timestamp_value = record.get("timestamp")
+        if not isinstance(timestamp_value, str):
+            continue
+        timestamp = _parse_timestamp(timestamp_value)
+        detected = bool(record.get("is_anomaly", False))
+        active_truth = [interval for interval in truth if _contains(interval, timestamp)]
+        expected = bool(active_truth)
+        evaluated += 1
+        if detected and expected:
+            true_positive += 1
+        elif detected and not expected:
+            false_positive += 1
+        elif not detected and expected:
+            false_negative += 1
+        else:
+            true_negative += 1
+        if detected and not bool(record.get("warmup_complete", True)):
+            warmup_false_positive += 1
+        for kind in {interval.kind for interval in active_truth}:
+            item = by_kind.setdefault(kind, {"truth_points": 0, "detected_points": 0})
+            item["truth_points"] += 1
+            if detected:
+                item["detected_points"] += 1
+    precision = (
+        true_positive / (true_positive + false_positive)
+        if true_positive + false_positive
+        else None
+    )
+    recall = (
+        true_positive / (true_positive + false_negative)
+        if true_positive + false_negative
+        else None
+    )
+    f1 = (
+        2.0 * precision * recall / (precision + recall)
+        if precision is not None and recall is not None and precision + recall > 0
+        else None
+    )
+    return {
+        "evaluated_points": evaluated,
+        "true_positive_points": true_positive,
+        "false_positive_points": false_positive,
+        "false_negative_points": false_negative,
+        "true_negative_points": true_negative,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "warmup_false_positive_points": warmup_false_positive,
+        "by_truth_kind": {
+            kind: {
+                **item,
+                "recall": (
+                    item["detected_points"] / item["truth_points"]
+                    if item["truth_points"]
+                    else None
+                ),
+            }
+            for kind, item in sorted(by_kind.items())
+        },
+    }
+
+
+def _event_kind_breakdown(
+    truth: list[EventInterval],
+    matches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    matched = {str(item["truth_event_id"]): item for item in matches}
+    by_kind: dict[str, list[EventInterval]] = {}
+    for interval in truth:
+        by_kind.setdefault(interval.kind, []).append(interval)
+    output: dict[str, Any] = {}
+    for kind, intervals in sorted(by_kind.items()):
+        kind_matches = [matched[item.event_id] for item in intervals if item.event_id in matched]
+        delays = [float(item["detection_delay_sec"]) for item in kind_matches]
+        output[kind] = {
+            "truth_events": len(intervals),
+            "matched_events": len(kind_matches),
+            "missed_events": len(intervals) - len(kind_matches),
+            "recall": len(kind_matches) / len(intervals) if intervals else None,
+            "mean_detection_delay_sec": sum(delays) / len(delays) if delays else None,
+            "max_detection_delay_sec": max(delays) if delays else None,
+        }
+    return output
+
+
 def benchmark_detection_file(
     detections_jsonl: str | Path,
     labels_json: str | Path,
@@ -267,6 +365,8 @@ def benchmark_detection_file(
             "detections_ref": str(detections_jsonl),
             "labels_ref": str(labels_json),
             "merge_gap_sec": merge_gap_sec,
+            "point_metrics": _point_metrics(records, truth),
+            "event_by_truth_kind": _event_kind_breakdown(truth, result["matches"]),
         }
     )
     output = Path(output_json)
