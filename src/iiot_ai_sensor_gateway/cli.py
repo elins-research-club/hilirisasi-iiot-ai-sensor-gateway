@@ -320,7 +320,9 @@ def build_parser() -> argparse.ArgumentParser:
     local_bakeoff.add_argument('--device', default='auto')
     stream = sub.add_parser('stream-detect', help='run native robust streaming detection or optional River HST+ADWIN')
     stream.add_argument('--input', required=True)
-    stream.add_argument('--backend', choices=('native', 'river'), default='native')
+    stream.add_argument(
+        '--backend', choices=('native', 'mad', 'ewma_cusum', 'river'), default='native'
+    )
     stream.add_argument('--output', default='data/modeling/streaming_detection.jsonl')
     stream.add_argument('--feature-names', type=_parse_string_list, required=True)
     stream.add_argument('--warmup-samples', type=_positive_int, default=64)
@@ -333,6 +335,10 @@ def build_parser() -> argparse.ArgumentParser:
     stream.add_argument('--z-scale', type=_positive_float, default=3.0)
     stream.add_argument('--page-hinkley-delta', type=float, default=0.005)
     stream.add_argument('--page-hinkley-threshold', type=_positive_float, default=0.25)
+    stream.add_argument('--mad-min-samples', type=_positive_int, default=16)
+    stream.add_argument('--persistence-samples', type=_positive_int, default=2)
+    stream.add_argument('--recovery-samples', type=_positive_int, default=3)
+    stream.add_argument('--clear-threshold', type=float, default=0.45)
     inject_anomaly = sub.add_parser('inject-anomaly-fixture', help='create deterministic normalized event-injection fixture for harness validation')
     inject_anomaly.add_argument('--output', default='data/modeling/anomaly_fixture.jsonl')
     inject_anomaly.add_argument('--labels', default='data/modeling/anomaly_fixture_labels.json')
@@ -744,6 +750,10 @@ def main(argv: list[str] | None = None) -> int:
                 z_scale=args.z_scale,
                 page_hinkley_delta=args.page_hinkley_delta,
                 page_hinkley_threshold=args.page_hinkley_threshold,
+                mad_min_samples=args.mad_min_samples,
+                persistence_samples=args.persistence_samples,
+                recovery_samples=args.recovery_samples,
+                clear_threshold=args.clear_threshold,
             )
         except RiverDependencyError as exc:
             print(str(exc), file=sys.stderr)

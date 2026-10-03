@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -62,6 +63,122 @@ class NativeRobustAnomaly:
         return self
 
 
+class RollingMADAnomaly:
+    """Robust score-before-learn anomaly model using rolling median and MAD.
+
+    The current sample is never included in the reference window used to score
+    itself. Per-feature scores are retained for attribution and diagnostics.
+    """
+
+    def __init__(
+        self,
+        *,
+        window_size: int = 128,
+        min_samples: int = 16,
+        z_scale: float = 3.5,
+        mad_floor: float = 1e-4,
+    ) -> None:
+        if window_size < 3 or min_samples < 2 or min_samples > window_size:
+            raise ValueError("MAD window_size/min_samples are invalid")
+        if z_scale <= 0 or mad_floor <= 0:
+            raise ValueError("MAD z_scale and mad_floor must be positive")
+        self.window_size = window_size
+        self.min_samples = min_samples
+        self.z_scale = z_scale
+        self.mad_floor = mad_floor
+        self._history: dict[str, deque[float]] = defaultdict(
+            lambda: deque(maxlen=window_size)
+        )
+        self.last_feature_scores: dict[str, float] = {}
+        self.last_feature_robust_z: dict[str, float] = {}
+
+    @staticmethod
+    def _median(values: list[float]) -> float:
+        ordered = sorted(values)
+        midpoint = len(ordered) // 2
+        if len(ordered) % 2:
+            return ordered[midpoint]
+        return (ordered[midpoint - 1] + ordered[midpoint]) / 2.0
+
+    def score_one(self, features: dict[str, float]) -> float:
+        scores: dict[str, float] = {}
+        robust_z: dict[str, float] = {}
+        for name, value in features.items():
+            history = list(self._history.get(name, ()))
+            if len(history) < self.min_samples:
+                scores[name] = 0.0
+                robust_z[name] = 0.0
+                continue
+            center = self._median(history)
+            mad = self._median([abs(item - center) for item in history])
+            sigma = max(1.4826 * mad, self.mad_floor)
+            z = abs(value - center) / sigma
+            robust_z[name] = z
+            scores[name] = 1.0 - math.exp(-z / self.z_scale)
+        self.last_feature_scores = scores
+        self.last_feature_robust_z = robust_z
+        return max(scores.values(), default=0.0)
+
+    def learn_one(self, features: dict[str, float]) -> RollingMADAnomaly:
+        for name, value in features.items():
+            self._history[name].append(float(value))
+        return self
+
+
+class EWMACUSUMAnomaly:
+    """Dependency-free adaptive EWMA/CUSUM comparator for normalized streams."""
+
+    def __init__(
+        self,
+        *,
+        alpha: float = 0.05,
+        drift: float = 0.01,
+        threshold: float = 0.25,
+    ) -> None:
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError("EWMA alpha must be in (0,1]")
+        if drift < 0 or threshold <= 0:
+            raise ValueError("CUSUM drift must be >=0 and threshold must be positive")
+        self.alpha = alpha
+        self.drift = drift
+        self.threshold = threshold
+        self._mean: dict[str, float] = {}
+        self._positive: dict[str, float] = defaultdict(float)
+        self._negative: dict[str, float] = defaultdict(float)
+        self.last_feature_scores: dict[str, float] = {}
+
+    def score_one(self, features: dict[str, float]) -> float:
+        scores: dict[str, float] = {}
+        for name, value in features.items():
+            if name not in self._mean:
+                scores[name] = 0.0
+                continue
+            residual = value - self._mean[name]
+            positive = max(0.0, self._positive[name] + residual - self.drift)
+            negative = min(0.0, self._negative[name] + residual + self.drift)
+            magnitude = max(positive, abs(negative))
+            scores[name] = 1.0 - math.exp(-magnitude / self.threshold)
+        self.last_feature_scores = scores
+        return max(scores.values(), default=0.0)
+
+    def learn_one(self, features: dict[str, float]) -> EWMACUSUMAnomaly:
+        for name, value in features.items():
+            if name not in self._mean:
+                self._mean[name] = float(value)
+                self._positive[name] = 0.0
+                self._negative[name] = 0.0
+                continue
+            residual = float(value) - self._mean[name]
+            self._positive[name] = max(
+                0.0, self._positive[name] + residual - self.drift
+            )
+            self._negative[name] = min(
+                0.0, self._negative[name] + residual + self.drift
+            )
+            self._mean[name] = (1.0 - self.alpha) * self._mean[name] + self.alpha * float(value)
+        return self
+
+
 class NativePageHinkley:
     """Small dependency-free Page-Hinkley-style mean-shift detector."""
 
@@ -97,12 +214,20 @@ class StreamingConfig:
     warmup_samples: int = 64
     anomaly_threshold: float = 0.7
     learn_after_score: bool = True
+    persistence_samples: int = 1
+    recovery_samples: int = 1
+    clear_threshold: float | None = None
 
     def validate(self) -> None:
         if self.warmup_samples < 1:
             raise ValueError("warmup_samples must be >= 1")
         if not 0.0 <= self.anomaly_threshold <= 1.0:
             raise ValueError("anomaly_threshold must be in [0, 1]")
+        if self.persistence_samples < 1 or self.recovery_samples < 1:
+            raise ValueError("persistence_samples and recovery_samples must be >= 1")
+        if self.clear_threshold is not None:
+            if not 0.0 <= self.clear_threshold <= self.anomaly_threshold:
+                raise ValueError("clear_threshold must be in [0, anomaly_threshold]")
 
 
 class StreamingDetectionPipeline:
@@ -119,6 +244,9 @@ class StreamingDetectionPipeline:
         self.config = config or StreamingConfig()
         self.config.validate()
         self.seen = 0
+        self._candidate_count = 0
+        self._recovery_count = 0
+        self._active_anomaly = False
 
     @staticmethod
     def _validate_features(features: dict[str, Any]) -> dict[str, float]:
@@ -163,7 +291,33 @@ class StreamingDetectionPipeline:
             if bool(detector.drift_detected):
                 drift_features.append(name)
         warmed_up = self.seen >= self.config.warmup_samples
-        is_anomaly = warmed_up and anomaly_score >= self.config.anomaly_threshold
+        clear_threshold = (
+            self.config.anomaly_threshold
+            if self.config.clear_threshold is None
+            else self.config.clear_threshold
+        )
+        above = warmed_up and anomaly_score >= self.config.anomaly_threshold
+        below_clear = warmed_up and anomaly_score < clear_threshold
+        if not self._active_anomaly:
+            self._candidate_count = self._candidate_count + 1 if above else 0
+            if self._candidate_count >= self.config.persistence_samples:
+                self._active_anomaly = True
+                self._candidate_count = 0
+                self._recovery_count = 0
+        else:
+            self._recovery_count = self._recovery_count + 1 if below_clear else 0
+            if self._recovery_count >= self.config.recovery_samples:
+                self._active_anomaly = False
+                self._recovery_count = 0
+        is_anomaly = bool(warmed_up and self._active_anomaly)
+        feature_scores = getattr(self.anomaly_model, "last_feature_scores", {})
+        ranked_features = sorted(
+            (
+                {"feature": str(name), "score": float(score)}
+                for name, score in feature_scores.items()
+            ),
+            key=lambda item: (-item["score"], item["feature"]),
+        )
         receive_timestamp = datetime.now(tz=UTC).isoformat()
         result = {
             "schema": STREAM_SCHEMA,
@@ -176,6 +330,8 @@ class StreamingDetectionPipeline:
             "sample_index": self.seen,
             "warmup_complete": warmed_up,
             "anomaly_score": anomaly_score,
+            "anomaly_feature_scores": ranked_features,
+            "anomaly_main_feature": ranked_features[0]["feature"] if ranked_features else None,
             "is_anomaly": is_anomaly,
             "drift_detected": bool(drift_features),
             "drift_features": sorted(drift_features),
@@ -212,6 +368,76 @@ def build_native_pipeline(
         model,
         detectors,
         StreamingConfig(warmup_samples=warmup_samples, anomaly_threshold=anomaly_threshold),
+    )
+
+
+def build_mad_pipeline(
+    *,
+    feature_names: tuple[str, ...],
+    warmup_samples: int = 64,
+    anomaly_threshold: float = 0.7,
+    window_size: int = 128,
+    min_samples: int = 16,
+    z_scale: float = 3.5,
+    persistence_samples: int = 2,
+    recovery_samples: int = 3,
+    clear_threshold: float = 0.45,
+    page_hinkley_delta: float = 0.005,
+    page_hinkley_threshold: float = 0.25,
+) -> StreamingDetectionPipeline:
+    if not feature_names:
+        raise ValueError("feature_names must not be empty")
+    model = RollingMADAnomaly(
+        window_size=window_size,
+        min_samples=min_samples,
+        z_scale=z_scale,
+    )
+    detectors = {
+        name: NativePageHinkley(
+            delta=page_hinkley_delta,
+            threshold=page_hinkley_threshold,
+        )
+        for name in feature_names
+    }
+    return StreamingDetectionPipeline(
+        model,
+        detectors,
+        StreamingConfig(
+            warmup_samples=warmup_samples,
+            anomaly_threshold=anomaly_threshold,
+            persistence_samples=persistence_samples,
+            recovery_samples=recovery_samples,
+            clear_threshold=clear_threshold,
+        ),
+    )
+
+
+def build_ewma_cusum_pipeline(
+    *,
+    feature_names: tuple[str, ...],
+    warmup_samples: int = 64,
+    anomaly_threshold: float = 0.7,
+    alpha: float = 0.05,
+    drift: float = 0.01,
+    threshold: float = 0.25,
+    persistence_samples: int = 2,
+    recovery_samples: int = 3,
+    clear_threshold: float = 0.45,
+) -> StreamingDetectionPipeline:
+    if not feature_names:
+        raise ValueError("feature_names must not be empty")
+    model = EWMACUSUMAnomaly(alpha=alpha, drift=drift, threshold=threshold)
+    detectors = {name: NativePageHinkley() for name in feature_names}
+    return StreamingDetectionPipeline(
+        model,
+        detectors,
+        StreamingConfig(
+            warmup_samples=warmup_samples,
+            anomaly_threshold=anomaly_threshold,
+            persistence_samples=persistence_samples,
+            recovery_samples=recovery_samples,
+            clear_threshold=clear_threshold,
+        ),
     )
 
 
@@ -266,6 +492,10 @@ def run_streaming_detection(
     z_scale: float = 3.0,
     page_hinkley_delta: float = 0.005,
     page_hinkley_threshold: float = 0.25,
+    mad_min_samples: int = 16,
+    persistence_samples: int = 2,
+    recovery_samples: int = 3,
+    clear_threshold: float = 0.45,
 ) -> dict[str, Any]:
     if backend == "river":
         pipeline = build_river_pipeline(
@@ -289,8 +519,36 @@ def run_streaming_detection(
             page_hinkley_threshold=page_hinkley_threshold,
         )
         backend_name = "native.RobustZScore+PageHinkley"
+    elif backend == "mad":
+        pipeline = build_mad_pipeline(
+            feature_names=feature_names,
+            warmup_samples=warmup_samples,
+            anomaly_threshold=anomaly_threshold,
+            window_size=window_size,
+            min_samples=mad_min_samples,
+            z_scale=z_scale,
+            persistence_samples=persistence_samples,
+            recovery_samples=recovery_samples,
+            clear_threshold=clear_threshold,
+            page_hinkley_delta=page_hinkley_delta,
+            page_hinkley_threshold=page_hinkley_threshold,
+        )
+        backend_name = "native.RollingMAD+PageHinkley"
+    elif backend == "ewma_cusum":
+        pipeline = build_ewma_cusum_pipeline(
+            feature_names=feature_names,
+            warmup_samples=warmup_samples,
+            anomaly_threshold=anomaly_threshold,
+            alpha=0.05,
+            drift=max(0.0, page_hinkley_delta),
+            threshold=page_hinkley_threshold,
+            persistence_samples=persistence_samples,
+            recovery_samples=recovery_samples,
+            clear_threshold=clear_threshold,
+        )
+        backend_name = "native.EWMA+CUSUM"
     else:
-        raise ValueError("backend must be 'native' or 'river'")
+        raise ValueError("backend must be 'native', 'mad', 'ewma_cusum', or 'river'")
     output = Path(output_jsonl)
     output.parent.mkdir(parents=True, exist_ok=True)
     processed = rejected = anomalies = drift_events = 0
