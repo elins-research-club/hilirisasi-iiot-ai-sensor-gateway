@@ -21,7 +21,7 @@ from .mqtt_contracts import (
 )
 from .mqtt_publisher import ReliableMQTTPublisher, SQLiteOutbox
 from .pipeline import PreModelPipeline
-from .live_forecast import LiveEdgeForecaster
+from .live_forecast import build_live_forecaster
 from .real.chirpstack_mqtt_source import ChirpStackMQTTSource, MQTTEnvelope
 from .runtime_logging import JsonlLogger
 from .streaming_detection import NativePageHinkley, NativeRobustAnomaly
@@ -152,7 +152,7 @@ class LiveSensorRuntime:
         )
         self.latest_readings: dict[str, Any] = {}
         self.forecaster = (
-            LiveEdgeForecaster(
+            build_live_forecaster(
                 config.forecast_runtime.manifest_path,
                 target_node_id=config.forecast_runtime.target_node_id,
                 cadence_tolerance_fraction=config.forecast_runtime.cadence_tolerance_fraction,

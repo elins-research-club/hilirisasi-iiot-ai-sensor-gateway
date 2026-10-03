@@ -218,3 +218,36 @@ class LiveEdgeForecaster:
             **self._provenance(),
             "inference_latency_ms": latency_ms,
         }
+
+
+def build_live_forecaster(
+    manifest_path: str | Path,
+    *,
+    target_node_id: str = "",
+    cadence_tolerance_fraction: float = 0.20,
+    device: str = "cpu",
+):
+    """Load a supported live forecaster without guessing the manifest schema."""
+
+    path = Path(manifest_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"forecast manifest not found: {path}")
+    document = json.loads(path.read_text(encoding="utf-8"))
+    schema = document.get("schema")
+    if schema == "iiot.ai_sensor.model_manifest.v1":
+        return LiveEdgeForecaster(
+            path,
+            target_node_id=target_node_id,
+            cadence_tolerance_fraction=cadence_tolerance_fraction,
+            device=device,
+        )
+    if schema == "iiot.ai_sensor.model_manifest.v2":
+        from .generic_forecast_runtime import GenericLiveForecasterV2
+
+        return GenericLiveForecasterV2(
+            path,
+            target_node_id=target_node_id,
+            cadence_tolerance_fraction=cadence_tolerance_fraction,
+            device=device,
+        )
+    raise ValueError(f"unsupported forecast manifest schema: {schema}")
