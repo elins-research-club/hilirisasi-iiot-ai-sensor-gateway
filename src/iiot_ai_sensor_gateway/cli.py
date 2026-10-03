@@ -21,6 +21,7 @@ from .esp32_sim import simulate_gary_esp32_payloads
 from .features import extract_features
 from .forecasting import (
     FORECAST_STRATEGIES,
+    TARGET_NAMES,
     build_forecast_decision_v1,
     build_forecast_payload_v1,
     evaluate_lstm_forecast,
@@ -29,6 +30,17 @@ from .forecasting import (
     run_forecast_experiments,
     select_best_forecast_model,
     train_lstm_forecast,
+)
+from .forecast_evaluator_v2 import (
+    build_forecast_dataset_v2,
+    evaluate_baselines_v2,
+    export_direct_horizon_datasets,
+)
+from .advanced_forecasting import (
+    MODEL_TYPES as LOCAL_MODEL_TYPES,
+    evaluate_local_forecast_v2,
+    run_local_bakeoff_v2,
+    train_local_forecast_v2,
 )
 from .normalization import MinMaxNormalizer
 from .live_runtime import LiveSensorRuntime
@@ -157,6 +169,34 @@ def build_parser() -> argparse.ArgumentParser:
     prep_forecast.add_argument('--cadence-sec', type=_nonnegative_float, default=0.0, help='0=infer from timestamps; positive value is validated against timestamps')
     prep_forecast.add_argument('--cadence-relative-tolerance', type=_positive_float, default=0.10)
     prep_forecast.add_argument('--max-irregular-fraction', type=_nonnegative_float, default=0.05)
+    prep_v2 = sub.add_parser(
+        'prepare-forecast-dataset-v2',
+        help='build leakage-safe contiguous multi-horizon forecast dataset v2',
+    )
+    prep_v2.add_argument('--config', default='config/default.toml')
+    prep_v2.add_argument('--windows', default='data/processed/windows.jsonl')
+    prep_v2.add_argument('--output-npz', default='data/modeling/forecast_v2.npz')
+    prep_v2.add_argument('--output-meta', default='data/modeling/forecast_v2.json')
+    prep_v2.add_argument('--target-names', type=_parse_string_list, default=TARGET_NAMES)
+    prep_v2.add_argument('--horizon-steps', type=_positive_int, default=5)
+    prep_v2.add_argument('--purge-gap-steps', type=_nonnegative_int, default=None)
+    prep_v2.add_argument('--cadence-sec', type=_nonnegative_float, default=0.0)
+    prep_v2.add_argument('--cadence-relative-tolerance', type=_positive_float, default=0.10)
+    prep_v2.add_argument('--max-irregular-fraction', type=_nonnegative_float, default=0.05)
+    prep_v2.add_argument('--seasonal-period', type=_nonnegative_int, default=0)
+    prep_v2.add_argument('--rolling-origin-folds', type=_positive_int, default=3)
+    baseline_v2 = sub.add_parser(
+        'evaluate-forecast-baselines-v2',
+        help='evaluate validation-selected multi-horizon baselines on dataset v2',
+    )
+    baseline_v2.add_argument('--dataset', default='data/modeling/forecast_v2.npz')
+    baseline_v2.add_argument('--output', default='data/modeling/forecast_v2_baselines.json')
+    direct_v2 = sub.add_parser(
+        'export-direct-horizons-v2',
+        help='export direct-horizon adapters for existing FITS/DLinear/LSTM comparators',
+    )
+    direct_v2.add_argument('--dataset', default='data/modeling/forecast_v2.npz')
+    direct_v2.add_argument('--output-dir', default='data/modeling/direct_horizons_v2')
     train_forecast = sub.add_parser('train-lstm-forecast', help='train PyTorch LSTM multi-target forecasting model')
     train_forecast.add_argument('--dataset', default='data/modeling/lstm_forecast_dataset.npz')
     train_forecast.add_argument('--output-dir', default='models/lstm_forecast/latest')
@@ -239,6 +279,45 @@ def build_parser() -> argparse.ArgumentParser:
     edge_predict.add_argument('--split', choices=('train', 'val', 'test'), default='test')
     edge_predict.add_argument('--max-samples', type=_nonnegative_int, default=0)
     edge_predict.add_argument('--device', default='auto')
+    local_train = sub.add_parser(
+        'train-local-forecast-v2',
+        help='train Ridge, ElasticNet, NLinear, or TSMixer-lite on dataset v2',
+    )
+    local_train.add_argument('--dataset', default='data/modeling/forecast_v2.npz')
+    local_train.add_argument('--output-dir', default='models/local_forecast_v2/latest')
+    local_train.add_argument('--model-type', choices=LOCAL_MODEL_TYPES, required=True)
+    local_train.add_argument('--alpha', type=_nonnegative_float, default=0.001)
+    local_train.add_argument('--l1-ratio', type=float, default=0.5)
+    local_train.add_argument('--epochs', type=_positive_int, default=50)
+    local_train.add_argument('--batch-size', type=_positive_int, default=64)
+    local_train.add_argument('--learning-rate', type=_positive_float, default=0.001)
+    local_train.add_argument('--patience', type=_positive_int, default=8)
+    local_train.add_argument('--seed', type=int, default=42)
+    local_train.add_argument('--device', default='auto')
+    local_train.add_argument('--blocks', type=_positive_int, default=2)
+    local_train.add_argument('--time-hidden', type=_positive_int, default=32)
+    local_train.add_argument('--feature-hidden', type=_positive_int, default=32)
+    local_train.add_argument('--dropout', type=float, default=0.1)
+    local_eval = sub.add_parser(
+        'evaluate-local-forecast-v2',
+        help='evaluate a local forecast v2 model against validation-selected baselines',
+    )
+    local_eval.add_argument('--dataset', default='data/modeling/forecast_v2.npz')
+    local_eval.add_argument('--model-meta', required=True)
+    local_eval.add_argument('--output', default=None)
+    local_eval.add_argument('--device', default='auto')
+    local_bakeoff = sub.add_parser(
+        'run-local-bakeoff-v2',
+        help='run repeated-seed host-only local forecast v2 comparison',
+    )
+    local_bakeoff.add_argument('--dataset', default='data/modeling/forecast_v2.npz')
+    local_bakeoff.add_argument('--output-dir', default='models/local_bakeoff_v2/latest')
+    local_bakeoff.add_argument(
+        '--model-types', type=_parse_string_list, default=LOCAL_MODEL_TYPES
+    )
+    local_bakeoff.add_argument('--seeds', type=_parse_int_list, default=(17, 42, 73))
+    local_bakeoff.add_argument('--tsmixer-epochs', type=_positive_int, default=30)
+    local_bakeoff.add_argument('--device', default='auto')
     stream = sub.add_parser('stream-detect', help='run native robust streaming detection or optional River HST+ADWIN')
     stream.add_argument('--input', required=True)
     stream.add_argument('--backend', choices=('native', 'river'), default='native')
@@ -450,6 +529,32 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(stats.as_dict(), indent=2))
         return 0
+    if args.cmd == 'prepare-forecast-dataset-v2':
+        config = load_config(args.config)
+        result = build_forecast_dataset_v2(
+            args.windows,
+            args.output_npz,
+            args.output_meta,
+            target_names=tuple(args.target_names),
+            horizon_steps=args.horizon_steps,
+            purge_gap_steps=args.purge_gap_steps,
+            declared_cadence_sec=(args.cadence_sec if args.cadence_sec > 0 else None),
+            cadence_relative_tolerance=args.cadence_relative_tolerance,
+            max_irregular_fraction=args.max_irregular_fraction,
+            seasonal_period=args.seasonal_period,
+            rolling_origin_folds=args.rolling_origin_folds,
+            normalization_ranges=config.normalization_ranges,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'evaluate-forecast-baselines-v2':
+        result = evaluate_baselines_v2(args.dataset, args.output)
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'export-direct-horizons-v2':
+        paths = export_direct_horizon_datasets(args.dataset, args.output_dir)
+        print(json.dumps({"outputs": paths}, indent=2))
+        return 0
     if args.cmd == 'train-lstm-forecast':
         result = train_lstm_forecast(
             args.dataset,
@@ -554,6 +659,52 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
         )
         print(output)
+        return 0
+    if args.cmd == 'train-local-forecast-v2':
+        if not 0.0 <= args.l1_ratio <= 1.0:
+            print('--l1-ratio must be in [0, 1]', file=sys.stderr)
+            return 2
+        if not 0.0 <= args.dropout < 1.0:
+            print('--dropout must be in [0, 1)', file=sys.stderr)
+            return 2
+        result = train_local_forecast_v2(
+            args.dataset,
+            args.output_dir,
+            model_type=args.model_type,
+            alpha=args.alpha,
+            l1_ratio=args.l1_ratio,
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            patience=args.patience,
+            seed=args.seed,
+            device=args.device,
+            blocks=args.blocks,
+            time_hidden=args.time_hidden,
+            feature_hidden=args.feature_hidden,
+            dropout=args.dropout,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'evaluate-local-forecast-v2':
+        result = evaluate_local_forecast_v2(
+            args.dataset,
+            args.model_meta,
+            args.output,
+            device=args.device,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'run-local-bakeoff-v2':
+        result = run_local_bakeoff_v2(
+            args.dataset,
+            args.output_dir,
+            model_types=tuple(args.model_types),
+            seeds=tuple(args.seeds),
+            tsmixer_epochs=args.tsmixer_epochs,
+            device=args.device,
+        )
+        print(json.dumps(result, indent=2))
         return 0
     if args.cmd == 'inject-anomaly-fixture':
         result = inject_labeled_normalized_fixture(
