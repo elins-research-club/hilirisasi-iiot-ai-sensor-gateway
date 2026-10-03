@@ -243,6 +243,69 @@ Baseline dipilih **per target pada validation split**, lalu dikunci untuk test. 
 
 Tidak ada model production winner tanpa repeated real-RAB evaluation dan benchmark Raspberry Pi aktual.
 
+### Forecast evaluator/model stack v2 — 3 Oktober 2026
+
+Workflow v2 sekarang tersedia berdampingan dengan jalur v1 untuk menjaga
+compatibility. V2 menambahkan label kontigu `t+1..t+H`, strict input/label
+anti-overlap, independent SeasonalNaive history, train-only MASE/schema,
+physical-unit metrics, split-conformal intervals, strict leave-group-out, dan
+rolling-origin evaluation yang **benar-benar melatih/menilai per fold**.
+
+Kandidat lokal v2 adalah Ridge, ElasticNet, NLinear, dan TSMixer-lite. Bake-off
+default hanya memakai development evidence; final test **tidak disentuh** kecuali
+`--evaluate-final-test` diberikan setelah kandidat dikunci.
+
+```bash
+$PY run_gateway.py prepare-forecast-dataset-v2 \
+  --windows data/processed/windows.jsonl \
+  --output-npz data/modeling/forecast_v2.npz \
+  --output-meta data/modeling/forecast_v2.json \
+  --horizon-steps 5 --cadence-sec 60
+
+$PY run_gateway.py evaluate-forecast-baselines-v2 \
+  --dataset data/modeling/forecast_v2.npz \
+  --output data/modeling/forecast_v2_baselines.json
+
+$PY run_gateway.py run-local-bakeoff-v2 \
+  --dataset data/modeling/forecast_v2.npz \
+  --output-dir models/local_bakeoff_v2/latest
+```
+
+Untuk group generalization, gunakan `--held-out-group gateway/node/room` saat
+membangun dataset. Group tersebut tidak boleh masuk feature selection, MASE,
+training, atau validation.
+
+Foundation models hanya comparator research opt-in. Granite TTM R3,
+Chronos-Bolt Tiny, dan FlowState tidak pernah di-download otomatis; TimesFM 3.0
+tetap diblokir dari production dependency di bawah current weight-license.
+
+```bash
+$PY run_gateway.py foundation-model-catalog --probe-environment
+```
+
+### Manifest registry + generic shadow runtime
+
+Model lokal v2 dapat diekspor menjadi manifest checksum-locked dan registry.
+Manifest v2 hanya menerima `shadow_only`/`disabled`; inventory registry bukan
+promotion otomatis. Runtime live tetap `forecast_runtime.enabled=false` sampai
+config deployment sengaja diubah.
+
+```bash
+$PY run_gateway.py export-local-model-manifest-v2 \
+  --model-meta models/local_forecast_v2/latest/model.json \
+  --output deployment/model-manifests/local-v2.json \
+  --model-id local-v2
+
+$PY run_gateway.py benchmark-forecast-runtime-v2 \
+  --dataset data/modeling/forecast_v2.npz \
+  --manifest deployment/model-manifests/local-v2.json \
+  --output models/local_forecast_v2/latest/runtime-benchmark.json
+```
+
+Benchmark mendeteksi hardware aktual, mengukur cold start, p50/p95/p99,
+throughput, RSS, CPU-time ratio, thermal best-effort, footprint, dan parity
+source→runtime. Hasil non-Pi diberi scope `CURRENT_HOST_MEASUREMENT_NOT_PI_EVIDENCE`.
+
 ## Anomaly/Drift Harness
 
 Streaming detector tetap score-before-learn, warm-up aware, dan input 0–1. Harness event-level tersedia:
@@ -265,7 +328,23 @@ $PY run_gateway.py benchmark-anomaly-events \
   --merge-gap-sec 60 --match-tolerance-sec 120
 ```
 
-Output: event precision/recall/F1, false-alert/day, detection delay, unmatched events. Fixture synthetic hanya memverifikasi harness, bukan accuracy field.
+Output sekarang mencakup event precision/recall/F1, false-alert/day, detection
+delay, point precision/recall/F1, warm-up false positive, serta breakdown per
+jenis ground-truth event. Fixture synthetic hanya memverifikasi harness, bukan
+accuracy field.
+
+Backend streaming tambahan `mad` dan `ewma_cusum` tersedia dengan persistence /
+hysteresis. Static research lane IsolationForest/ECOD/COPOD memakai fit reference
+yang terpisah dari evaluation; dependency research tidak pernah auto-install.
+TSPulse memiliki preflight context/dependency terpisah dan tidak menjadi runtime
+default.
+
+```bash
+$PY run_gateway.py anomaly-research-catalog --probe-environment
+$PY run_gateway.py tspulse-preflight \
+  --input data/modeling/anomaly_fixture.jsonl \
+  --feature-names temperature_c,pm25_ug_m3
+```
 
 ## Laptop CUDA Bake-off
 

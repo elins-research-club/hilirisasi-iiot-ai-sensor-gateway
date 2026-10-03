@@ -12,6 +12,12 @@ from .anomaly_benchmark import (
     benchmark_detection_file,
     inject_labeled_normalized_fixture,
 )
+from .anomaly_research import (
+    anomaly_research_catalog,
+    probe_anomaly_research_environment,
+    run_static_anomaly_research,
+    tspulse_preflight,
+)
 from .adapters.bristol_bme680 import adapt_bristol_bme680_csv
 from .adapters.uci_air_quality import adapt_uci_air_quality_csv
 from .adapters.zenodo_pm_reference import adapt_zenodo_pm_reference_csv
@@ -38,10 +44,23 @@ from .forecast_evaluator_v2 import (
 )
 from .advanced_forecasting import (
     MODEL_TYPES as LOCAL_MODEL_TYPES,
+    evaluate_rolling_origin_local_v2,
     evaluate_local_forecast_v2,
     run_local_bakeoff_v2,
     train_local_forecast_v2,
 )
+from .foundation_comparators import (
+    foundation_model_catalog,
+    probe_foundation_environment,
+    run_chronos_bolt_zero_shot_v2,
+    run_flowstate_zero_shot_v2,
+    run_granite_ttm_zero_shot_v2,
+)
+from .model_registry import (
+    build_model_registry,
+    export_local_deployment_manifest,
+)
+from .runtime_benchmark import benchmark_forecast_runtime_v2
 from .normalization import MinMaxNormalizer
 from .live_runtime import LiveSensorRuntime
 from .edge_forecasting import (
@@ -185,6 +204,11 @@ def build_parser() -> argparse.ArgumentParser:
     prep_v2.add_argument('--max-irregular-fraction', type=_nonnegative_float, default=0.05)
     prep_v2.add_argument('--seasonal-period', type=_nonnegative_int, default=0)
     prep_v2.add_argument('--rolling-origin-folds', type=_positive_int, default=3)
+    prep_v2.add_argument(
+        '--held-out-group',
+        default=None,
+        help='strict leave-group-out id in gateway/node/room form; excluded from train/val entirely',
+    )
     baseline_v2 = sub.add_parser(
         'evaluate-forecast-baselines-v2',
         help='evaluate validation-selected multi-horizon baselines on dataset v2',
@@ -318,6 +342,94 @@ def build_parser() -> argparse.ArgumentParser:
     local_bakeoff.add_argument('--seeds', type=_parse_int_list, default=(17, 42, 73))
     local_bakeoff.add_argument('--tsmixer-epochs', type=_positive_int, default=30)
     local_bakeoff.add_argument('--device', default='auto')
+    local_bakeoff.add_argument(
+        '--no-rolling-origin', action='store_true',
+        help='skip rolling-origin development evaluation (enabled by default)',
+    )
+    local_bakeoff.add_argument(
+        '--evaluate-final-test', action='store_true',
+        help='explicitly touch final holdout after candidate lock; never use this to rank all candidates',
+    )
+    rolling_eval = sub.add_parser(
+        'evaluate-rolling-origin-local-v2',
+        help='evaluate one local v2 model family across leakage-safe development folds',
+    )
+    rolling_eval.add_argument('--dataset', default='data/modeling/forecast_v2.npz')
+    rolling_eval.add_argument('--model-type', choices=LOCAL_MODEL_TYPES, required=True)
+    rolling_eval.add_argument('--seeds', type=_parse_int_list, default=(17, 42, 73))
+    rolling_eval.add_argument('--tsmixer-epochs', type=_positive_int, default=30)
+    rolling_eval.add_argument('--device', default='auto')
+    export_manifest = sub.add_parser(
+        'export-local-model-manifest-v2',
+        help='export a checksummed shadow-only deployment manifest for a local v2 model',
+    )
+    export_manifest.add_argument('--model-meta', required=True)
+    export_manifest.add_argument('--output', required=True)
+    export_manifest.add_argument('--model-id', required=True)
+    export_manifest.add_argument('--target-node-id', default='')
+    export_manifest.add_argument('--readiness', default='EXPERIMENTAL')
+    registry = sub.add_parser(
+        'build-model-registry-v1',
+        help='build checksummed model inventory from v2 deployment manifests',
+    )
+    registry.add_argument('--manifest', action='append', required=True)
+    registry.add_argument('--output', default='deployment/model-registry.json')
+    runtime_bench = sub.add_parser(
+        'benchmark-forecast-runtime-v2',
+        help='benchmark a v2 deployment manifest on the current host with source/runtime parity',
+    )
+    runtime_bench.add_argument('--dataset', default='data/modeling/forecast_v2.npz')
+    runtime_bench.add_argument('--manifest', required=True)
+    runtime_bench.add_argument('--output', required=True)
+    runtime_bench.add_argument('--split', choices=('train', 'val', 'test'), default='test')
+    runtime_bench.add_argument('--iterations', type=_positive_int, default=200)
+    runtime_bench.add_argument('--warmup', type=_nonnegative_int, default=10)
+    runtime_bench.add_argument('--device', default='cpu')
+    runtime_bench.add_argument('--parity-samples', type=_positive_int, default=32)
+    foundation_catalog_cmd = sub.add_parser(
+        'foundation-model-catalog',
+        help='show curated optional foundation-model research comparators and license boundaries',
+    )
+    foundation_catalog_cmd.add_argument('--probe-environment', action='store_true')
+    granite = sub.add_parser(
+        'run-granite-ttm-zero-shot-v2',
+        help='run optional Granite TTM R3 zero-shot comparator under evaluator v2',
+    )
+    granite.add_argument('--dataset', default='data/modeling/forecast_v2.npz')
+    granite.add_argument('--output', default='models/foundation_comparators/granite_ttm_r3.json')
+    granite.add_argument('--split', choices=('val', 'test'), default='test')
+    granite.add_argument('--model-path', default='ibm-granite/granite-timeseries-ttm-r3')
+    granite.add_argument('--device', default='cpu')
+    granite.add_argument('--batch-size', type=_positive_int, default=64)
+    granite.add_argument(
+        '--allow-download',
+        action='store_true',
+        help='explicitly permit Hugging Face model download; default is local cache only',
+    )
+    granite.add_argument('--full-model', action='store_true', help='prefer full instead of lite TTM')
+    chronos = sub.add_parser(
+        'run-chronos-bolt-zero-shot-v2',
+        help='run optional Chronos-Bolt Tiny target-history comparator under evaluator v2',
+    )
+    chronos.add_argument('--dataset', default='data/modeling/forecast_v2.npz')
+    chronos.add_argument('--output', default='models/foundation_comparators/chronos_bolt_tiny.json')
+    chronos.add_argument('--split', choices=('val', 'test'), default='test')
+    chronos.add_argument('--model-path', default='amazon/chronos-bolt-tiny')
+    chronos.add_argument('--device', default='cpu')
+    chronos.add_argument('--batch-size', type=_positive_int, default=64)
+    chronos.add_argument('--allow-download', action='store_true')
+    flowstate = sub.add_parser(
+        'run-flowstate-zero-shot-v2',
+        help='run optional FlowState comparator with explicit sampling scale',
+    )
+    flowstate.add_argument('--dataset', default='data/modeling/forecast_v2.npz')
+    flowstate.add_argument('--output', default='models/foundation_comparators/flowstate_r1.json')
+    flowstate.add_argument('--split', choices=('val', 'test'), default='test')
+    flowstate.add_argument('--model-path', default='ibm-granite/granite-timeseries-flowstate-r1')
+    flowstate.add_argument('--revision', default='r1.1')
+    flowstate.add_argument('--device', default='cpu')
+    flowstate.add_argument('--scale-factor', type=_positive_float, required=True)
+    flowstate.add_argument('--allow-download', action='store_true')
     stream = sub.add_parser('stream-detect', help='run native robust streaming detection or optional River HST+ADWIN')
     stream.add_argument('--input', required=True)
     stream.add_argument(
@@ -352,6 +464,32 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_anomaly.add_argument('--output', default='data/modeling/anomaly_benchmark.json')
     benchmark_anomaly.add_argument('--merge-gap-sec', type=_nonnegative_float, default=0.0)
     benchmark_anomaly.add_argument('--match-tolerance-sec', type=_nonnegative_float, default=0.0)
+    anomaly_catalog_cmd = sub.add_parser(
+        'anomaly-research-catalog',
+        help='show optional static/foundation anomaly research comparators',
+    )
+    anomaly_catalog_cmd.add_argument('--probe-environment', action='store_true')
+    static_anomaly = sub.add_parser(
+        'run-static-anomaly-research',
+        help='fit optional static anomaly baseline on separate reference data and score evaluation data',
+    )
+    static_anomaly.add_argument('--fit-input', required=True)
+    static_anomaly.add_argument('--eval-input', required=True)
+    static_anomaly.add_argument('--output', default='data/modeling/static_anomaly_scores.jsonl')
+    static_anomaly.add_argument('--feature-names', type=_parse_string_list, required=True)
+    static_anomaly.add_argument(
+        '--backend', choices=('isolation_forest', 'ecod', 'copod'), required=True
+    )
+    static_anomaly.add_argument('--contamination', type=_positive_float, default=0.01)
+    static_anomaly.add_argument('--seed', type=int, default=42)
+    static_anomaly.add_argument('--n-estimators', type=_positive_int, default=200)
+    tspulse_check = sub.add_parser(
+        'tspulse-preflight',
+        help='check context/dependency readiness for the optional Granite TSPulse research lane',
+    )
+    tspulse_check.add_argument('--input', required=True)
+    tspulse_check.add_argument('--feature-names', type=_parse_string_list, required=True)
+    tspulse_check.add_argument('--minimum-points', type=_positive_int, default=1536)
     selector = sub.add_parser('select-best-forecast-model', help='select a forecast model candidate from experiment summary.csv')
     selector.add_argument('--summary', default='models/forecast_experiments/latest/summary.csv')
     selector.add_argument('--output', default='models/forecast_experiments/latest/best_model_selection.json')
@@ -550,6 +688,7 @@ def main(argv: list[str] | None = None) -> int:
             seasonal_period=args.seasonal_period,
             rolling_origin_folds=args.rolling_origin_folds,
             normalization_ranges=config.normalization_ranges,
+            held_out_group=args.held_out_group,
         )
         print(json.dumps(result, indent=2))
         return 0
@@ -709,7 +848,102 @@ def main(argv: list[str] | None = None) -> int:
             seeds=tuple(args.seeds),
             tsmixer_epochs=args.tsmixer_epochs,
             device=args.device,
+            rolling_origin=not args.no_rolling_origin,
+            evaluate_final_test=args.evaluate_final_test,
         )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'evaluate-rolling-origin-local-v2':
+        result = evaluate_rolling_origin_local_v2(
+            args.dataset,
+            model_type=args.model_type,
+            seeds=tuple(args.seeds),
+            tsmixer_epochs=args.tsmixer_epochs,
+            device=args.device,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'export-local-model-manifest-v2':
+        result = export_local_deployment_manifest(
+            args.model_meta,
+            args.output,
+            model_id=args.model_id,
+            target_node_id=args.target_node_id,
+            readiness=args.readiness,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'build-model-registry-v1':
+        result = build_model_registry(args.manifest, args.output)
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'benchmark-forecast-runtime-v2':
+        result = benchmark_forecast_runtime_v2(
+            args.dataset,
+            args.manifest,
+            args.output,
+            split=args.split,
+            iterations=args.iterations,
+            warmup=args.warmup,
+            device=args.device,
+            parity_samples=args.parity_samples,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'foundation-model-catalog':
+        result = foundation_model_catalog()
+        if args.probe_environment:
+            result["environment"] = probe_foundation_environment()
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'run-granite-ttm-zero-shot-v2':
+        try:
+            result = run_granite_ttm_zero_shot_v2(
+                args.dataset,
+                args.output,
+                split=args.split,
+                model_path=args.model_path,
+                device=args.device,
+                batch_size=args.batch_size,
+                local_files_only=not args.allow_download,
+                use_lite=not args.full_model,
+            )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'run-chronos-bolt-zero-shot-v2':
+        try:
+            result = run_chronos_bolt_zero_shot_v2(
+                args.dataset,
+                args.output,
+                split=args.split,
+                model_path=args.model_path,
+                device=args.device,
+                local_files_only=not args.allow_download,
+                batch_size=args.batch_size,
+            )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'run-flowstate-zero-shot-v2':
+        try:
+            result = run_flowstate_zero_shot_v2(
+                args.dataset,
+                args.output,
+                split=args.split,
+                model_path=args.model_path,
+                revision=args.revision,
+                device=args.device,
+                local_files_only=not args.allow_download,
+                scale_factor=args.scale_factor,
+            )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
         print(json.dumps(result, indent=2))
         return 0
     if args.cmd == 'inject-anomaly-fixture':
@@ -730,6 +964,37 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             merge_gap_sec=args.merge_gap_sec,
             match_tolerance_sec=args.match_tolerance_sec,
+        )
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'anomaly-research-catalog':
+        result = anomaly_research_catalog()
+        if args.probe_environment:
+            result['environment'] = probe_anomaly_research_environment()
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'run-static-anomaly-research':
+        try:
+            result = run_static_anomaly_research(
+                args.fit_input,
+                args.eval_input,
+                args.output,
+                feature_names=tuple(args.feature_names),
+                backend=args.backend,
+                contamination=args.contamination,
+                seed=args.seed,
+                n_estimators=args.n_estimators,
+            )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.cmd == 'tspulse-preflight':
+        result = tspulse_preflight(
+            args.input,
+            feature_names=tuple(args.feature_names),
+            minimum_points=args.minimum_points,
         )
         print(json.dumps(result, indent=2))
         return 0

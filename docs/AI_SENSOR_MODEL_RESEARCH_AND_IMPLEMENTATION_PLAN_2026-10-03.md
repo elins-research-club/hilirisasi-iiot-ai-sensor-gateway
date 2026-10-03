@@ -442,38 +442,59 @@ feature.
 
 ### Phase 1 — dataset/evaluator v2
 
-- multi-horizon target arrays;
-- rolling-origin folds;
-- device/site group split;
-- balanced caps for multi-node large lanes;
-- independent seasonal baseline history;
-- probabilistic/conformal metric schema;
-- exact dataset/model manifest linkage.
+**IMPLEMENTED HOST — field evidence still open.**
+
+- [x] contiguous multi-horizon target arrays;
+- [x] leakage-safe rolling-origin folds with actual per-fold training/evaluation;
+- [x] strict leave-group-out split that excludes held group from train statistics/schema;
+- [x] independent seasonal baseline history;
+- [x] physical-unit + normalized metrics and prediction-range diagnostics;
+- [x] split-conformal intervals calibrated only on validation;
+- [x] exact dataset/model feature schema + SHA linkage;
+- [ ] balanced large-lane sampling policy is still dataset-specific and must be
+  selected only when a real large multi-node capture requires a cap.
 
 ### Phase 2 — low-cost new models
 
-- NLinear;
-- Ridge/ElasticNet lag baseline;
-- TSMixer-lite;
-- common model adapter so all models share the same evaluator.
+**IMPLEMENTED HOST.**
+
+- [x] NLinear;
+- [x] dependency-light Ridge/ElasticNet lag regression;
+- [x] TSMixer-lite multivariate challenger;
+- [x] common evaluator/metrics/baseline contract;
+- [x] repeated-seed TSMixer and development rolling-origin harness;
+- [x] final holdout is opt-in after candidate lock, not default bake-off input.
 
 ### Phase 3 — pretrained comparators
 
-- Granite TTM R3 zero-shot/few-shot;
-- FlowState zero-shot for sampling-rate robustness research;
-- Chronos-Bolt Tiny if dependency/resource budget remains acceptable.
+**IMPLEMENTED AS OPTIONAL HOST RESEARCH ADAPTERS; model packages/weights are not
+installed into the gateway runtime.**
+
+- [x] Granite TTM R3 zero-shot adapter, local-cache-first/download opt-in;
+- [x] Chronos-Bolt Tiny target-history comparator + native quantile interval;
+- [x] FlowState R1 adapter with explicit scale-factor requirement and context gate;
+- [x] fail-closed research catalog/license boundary;
+- [ ] few-shot foundation-model training remains intentionally deferred until
+  project-real data is long enough to justify it.
 
 All downloads/models remain optional research dependencies and may not enter the
 gateway release merely because host evaluation succeeds.
 
 ### Phase 4 — anomaly v2
 
-- rename/alias current detector so standard z-score semantics are explicit;
-- add rolling MAD baseline and attribution (`top_anomaly_feature`);
-- add persistence/hysteresis/debounce;
-- benchmark static-window and streaming methods by anomaly type;
-- TSPulse + conformal residual as challengers;
-- calibrate thresholds using false-alert/day, not arbitrary score preference.
+**IMPLEMENTED HOST HARNESS; real labeled threshold calibration remains open.**
+
+- [x] explicit `NativeOnlineZScoreAnomaly` semantic alias for historical z-score;
+- [x] rolling MAD + per-feature attribution;
+- [x] EWMA/CUSUM comparator;
+- [x] persistence/hysteresis/debounce;
+- [x] event + point precision/recall/F1, false-alert/day, delay, warm-up FP,
+  and per-event-kind breakdown;
+- [x] IsolationForest static research harness on separate fit/eval sources;
+- [x] ECOD/COPOD optional adapters with actionable dependency gate;
+- [x] TSPulse catalog/context/dependency preflight;
+- [x] forecast split-conformal uncertainty available for residual-based follow-up;
+- [ ] threshold calibration on project-real labeled events remains field-data blocked.
 
 ### Phase 5 — model runtime abstraction
 
@@ -496,6 +517,12 @@ Prefer NumPy or ONNX Runtime for deployable local models. PyTorch/granite-tsfm
 can remain an optional research runtime until Pi resource measurements justify
 shipping it.
 
+**IMPLEMENTED for local v2 candidates:** checksum-locked manifest v2 + registry,
+NumPy Ridge/ElasticNet/NLinear, optional Torch TSMixer shadow runtime, v1/v2
+manifest dispatch, cadence/missing/schema fail-closed gates, and source/runtime
+parity test. ONNX remains an optional future backend rather than an unnecessary
+dependency today.
+
 ### Phase 6 — Raspberry Pi shadow bake-off
 
 For each surviving candidate:
@@ -509,12 +536,25 @@ For each surviving candidate:
 7. rollback proof;
 8. long soak only after short acceptance passes.
 
+**SOFTWARE HARNESS IMPLEMENTED; CURRENT HARDWARE BLOCKED.**
+
+`benchmark-forecast-runtime-v2` measures cold start, p50/p95/p99 latency,
+throughput, process RSS, CPU-time ratio, thermal best-effort, artifact/dependency
+footprint, and source/runtime parity while labelling the actual host. Probe on
+3 October found `iiotgw` / `100.93.215.11` offline in Tailscale (last seen about
+21 h), Tailscale/ICMP ping timeout, and read-only SSH unavailable. Therefore no
+new Pi resource, reboot, rehydration, or soak evidence is claimed in this task.
+
 ### Phase 7 — field model promotion
 
 Promotion requires project-real data, repeated temporal + device/site evidence,
 Pi resource evidence, stable calibration, and field soak. `PROMISING` remains a
 lane-specific research label; `PRODUCTION` is a separate deployment/operations
 gate.
+
+**BLOCKED BY EVIDENCE, intentionally not forced.** No current project-real
+days-to-weeks 60-s capture with independent nodes/rooms + labels exists in this
+workstream, and current Pi is unreachable. No model is promoted to production.
 
 ## Data Collection Guidance
 
