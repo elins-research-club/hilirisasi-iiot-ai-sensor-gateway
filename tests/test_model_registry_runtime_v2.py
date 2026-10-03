@@ -22,6 +22,7 @@ from iiot_ai_sensor_gateway.model_registry import (
     validate_deployment_manifest,
 )
 from iiot_ai_sensor_gateway.normalization import DEFAULT_RANGES
+from iiot_ai_sensor_gateway.runtime_benchmark import benchmark_forecast_runtime_v2
 
 
 FEATURES = ("temperature_c", "humidity_pct")
@@ -188,6 +189,36 @@ class RegistryRuntimeV2Tests(unittest.TestCase):
             manifest_path.write_text(json.dumps(document), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "feature_names"):
                 validate_deployment_manifest(manifest_path)
+
+    def test_runtime_benchmark_reports_host_scope_and_source_parity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = _make_dataset(root)
+            model_dir = root / "nlinear"
+            train_local_forecast_v2(dataset, model_dir, model_type="nlinear")
+            manifest_path = root / "deploy.json"
+            export_local_deployment_manifest(
+                model_dir / "model.json",
+                manifest_path,
+                model_id="nlinear-benchmark-v2",
+            )
+            result = benchmark_forecast_runtime_v2(
+                dataset,
+                manifest_path,
+                iterations=8,
+                warmup=2,
+                parity_samples=4,
+                device="cpu",
+            )
+            self.assertTrue(result["parity"]["passed"])
+            self.assertEqual(result["samples_benchmarked"], 8)
+            self.assertIn("p99", result["latency_ms"])
+            self.assertGreater(result["footprint"]["artifact_bytes"], 0)
+            self.assertIn(
+                result["evidence_scope"],
+                {"RASPBERRY_PI_5_MEASUREMENT", "CURRENT_HOST_MEASUREMENT_NOT_PI_EVIDENCE"},
+            )
+            self.assertFalse(result["production_promotion"])
 
 
 if __name__ == "__main__":

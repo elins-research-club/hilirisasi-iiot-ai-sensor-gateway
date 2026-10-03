@@ -136,6 +136,8 @@ class GenericLiveForecasterV2:
         values = np.asarray(history, dtype=np.float64)
         if values.shape != (self.input_length, len(self.feature_names)):
             raise ValueError("local forecast runtime history shape mismatch")
+        if not np.isfinite(values).all():
+            raise ValueError("local forecast runtime history contains non-finite values")
         state = self._model
         if self.runtime_backend == "numpy_linear_v2":
             flat = values.reshape(1, -1)
@@ -156,6 +158,21 @@ class GenericLiveForecasterV2:
         with torch.no_grad():
             tensor = torch.from_numpy(values.astype("float32")).unsqueeze(0).to(self._device)
             return self._model(tensor)[0].detach().cpu().numpy()
+
+    def predict_normalized_history(self, history: Any) -> Any:
+        """Run one already-normalized history for parity/resource benchmarking.
+
+        This method does not mutate live cadence/history state. Production live
+        ingestion must still use :meth:`process`, which enforces node identity,
+        raw-feature normalization, missingness, cadence, and warm-up gates.
+        """
+
+        try:
+            import numpy as np
+        except ModuleNotFoundError as exc:  # pragma: no cover
+            raise RuntimeError("NumPy is required for local edge forecast runtime") from exc
+        values = np.asarray(history, dtype=np.float64)
+        return self._predict(values.tolist())
 
     def _provenance(self) -> dict[str, Any]:
         return {
@@ -212,7 +229,7 @@ class GenericLiveForecasterV2:
                 **self._provenance(),
             }
         started = time.perf_counter()
-        normalized = self._predict(list(history))
+        normalized = self.predict_normalized_history(list(history))
         latency_ms = (time.perf_counter() - started) * 1000.0
         trajectory = [
             {
