@@ -12,8 +12,10 @@ from typing import Any
 
 from .forecast_evaluator_v2 import (
     METRICS_SCHEMA,
+    calibrate_conformal_radius_v2,
     compose_selected_baseline_v2,
     evaluate_baselines_v2,
+    interval_metrics_v2,
     load_forecast_dataset_v2,
     regression_metrics_v2,
 )
@@ -560,6 +562,7 @@ def train_local_forecast_v2(
         val_prediction,
         data["target_names_tuple"],
         data["mase_scale"],
+        data["meta"].get("normalization_ranges", {}),
     )
     metadata = {
         "schema": MODEL_SCHEMA,
@@ -572,6 +575,7 @@ def train_local_forecast_v2(
         "feature_schema_sha256": str(data["feature_schema_sha256"][0]),
         "target_names": list(data["target_names_tuple"]),
         "target_indices": [int(value) for value in data["target_indices"]],
+        "normalization_ranges": data["meta"].get("normalization_ranges", {}),
         "sequence_length": int(data["X_train"].shape[1]),
         "horizon_steps": int(data["Y_train"].shape[1]),
         "cadence_seconds": float(data["cadence_seconds"][0]),
@@ -708,6 +712,7 @@ def evaluate_local_forecast_v2(
         "baseline_selection": selection,
         "splits": {},
     }
+    predictions_by_split: dict[str, Any] = {}
     for split in ("train", "val", "test"):
         predicted = predict_local_forecast_v2(
             dataset_npz,
@@ -716,11 +721,13 @@ def evaluate_local_forecast_v2(
             device=device,
             batch_size=batch_size,
         )
+        predictions_by_split[split] = predicted
         metrics = regression_metrics_v2(
             data[f"Y_{split}"],
             predicted,
             data["target_names_tuple"],
             data["mase_scale"],
+            data["meta"].get("normalization_ranges", {}),
         )
         baseline_prediction = compose_selected_baseline_v2(data, split, selection)
         baseline_metrics = regression_metrics_v2(
@@ -728,10 +735,35 @@ def evaluate_local_forecast_v2(
             baseline_prediction,
             data["target_names_tuple"],
             data["mase_scale"],
+            data["meta"].get("normalization_ranges", {}),
         )
         metrics["baseline"] = baseline_metrics
         metrics["baseline_delta"] = _baseline_delta(metrics, baseline_metrics)
         result["splits"][split] = metrics
+
+    conformal_radius = calibrate_conformal_radius_v2(
+        data["Y_val"], predictions_by_split["val"], coverage=0.90
+    )
+    result["uncertainty"] = {
+        "method": "split_conformal_absolute_residual",
+        "calibration_split": "validation",
+        "target_coverage": 0.90,
+        "radius_normalized": conformal_radius.tolist(),
+        "validation": interval_metrics_v2(
+            data["Y_val"],
+            predictions_by_split["val"],
+            conformal_radius,
+            data["target_names_tuple"],
+            normalization_ranges=data["meta"].get("normalization_ranges", {}),
+        ),
+        "test": interval_metrics_v2(
+            data["Y_test"],
+            predictions_by_split["test"],
+            conformal_radius,
+            data["target_names_tuple"],
+            normalization_ranges=data["meta"].get("normalization_ranges", {}),
+        ),
+    }
 
     test_delta = result["splits"]["test"]["baseline_delta"]
     target_results = test_delta["per_target"]

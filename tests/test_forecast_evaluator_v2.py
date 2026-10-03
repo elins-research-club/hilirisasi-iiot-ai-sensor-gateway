@@ -114,6 +114,15 @@ class ForecastEvaluatorV2Tests(unittest.TestCase):
             self.assertEqual(metrics["baseline_selection_split"], "validation")
             self.assertEqual(set(metrics["splits"]), {"train", "val", "test"})
             self.assertEqual(set(metrics["splits"]["test"]["per_horizon"]), {"1", "2", "3", "4"})
+            self.assertIn("physical_units", metrics["splits"]["test"])
+            self.assertFalse(
+                metrics["splits"]["test"]["prediction_range_diagnostics"][
+                    "silent_clipping_applied"
+                ]
+            )
+            self.assertEqual(metrics["uncertainty"]["calibration_split"], "validation")
+            self.assertGreaterEqual(metrics["uncertainty"]["test"]["overall_coverage"], 0.0)
+            self.assertLessEqual(metrics["uncertainty"]["test"]["overall_coverage"], 1.0)
             self.assertEqual(
                 metrics["selection"]["applicability"]["seasonal_naive"]["applicable"],
                 False,
@@ -155,6 +164,63 @@ class ForecastEvaluatorV2Tests(unittest.TestCase):
                     horizon_steps=3,
                     declared_cadence_sec=300,
                 )
+
+    def test_strict_group_holdout_excludes_group_from_training_and_feature_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            windows = root / "windows.jsonl"
+            start = datetime(2026, 1, 1, tzinfo=UTC)
+            rows = []
+            window = 6
+            for group in range(2):
+                points = []
+                for index in range(150):
+                    aux = 0.25 if group == 0 else 0.1 + (index % 11) * 0.01
+                    points.append(
+                        [
+                            0.3 + index * 0.001,
+                            0.5 + ((index % 7) - 3) * 0.002,
+                            aux,
+                        ]
+                    )
+                for index in range(window - 1, len(points)):
+                    rows.append(
+                        json.dumps(
+                            {
+                                "gateway_id": "gw-test",
+                                "node_id": f"Node{group + 1}",
+                                "room_id": f"room-{group + 1}",
+                                "start_timestamp": (
+                                    start + timedelta(minutes=index - window + 1)
+                                ).isoformat(),
+                                "end_timestamp": (start + timedelta(minutes=index)).isoformat(),
+                                "feature_names": list(FEATURES),
+                                "shape": [window, len(FEATURES)],
+                                "x": points[index - window + 1 : index + 1],
+                            }
+                        )
+                        + "\n"
+                    )
+            windows.write_text("".join(rows), encoding="utf-8")
+            held = "gw-test/Node2/room-2"
+            dataset = root / "holdout.npz"
+            meta = build_forecast_dataset_v2(
+                windows,
+                dataset,
+                root / "holdout.json",
+                target_names=TARGETS,
+                horizon_steps=3,
+                declared_cadence_sec=60,
+                held_out_group=held,
+            )
+            loaded = load_forecast_dataset_v2(dataset)
+            self.assertEqual(meta["final_holdout"], "leave_group_out")
+            self.assertEqual(meta["held_out_group"], held)
+            self.assertTrue(meta["promotion_policy"]["strict_group_holdout_dataset"])
+            self.assertNotIn("aux", meta["feature_names"])
+            self.assertTrue(all(group != held for group in loaded["group_id_train"]))
+            self.assertTrue(all(group != held for group in loaded["group_id_val"]))
+            self.assertTrue(all(group == held for group in loaded["group_id_test"]))
 
 
 if __name__ == "__main__":

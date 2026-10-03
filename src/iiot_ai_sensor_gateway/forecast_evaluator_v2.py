@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .dataset_quality import finite_or_raise, infer_cadence, select_active_features
+from .normalization import DEFAULT_RANGES
 from .window_paths import resolve_windows_path
 
 DATASET_SCHEMA = "iiot.ai_sensor.forecast_dataset.v2"
@@ -392,6 +393,7 @@ def build_forecast_dataset_v2(
     rolling_origin_folds: int = 3,
     near_constant_epsilon: float = 1e-8,
     normalization_ranges: dict[str, tuple[float, float]] | None = None,
+    held_out_group: str | None = None,
 ) -> dict[str, Any]:
     """Build a leakage-resistant contiguous multi-horizon forecast dataset.
 
@@ -427,6 +429,12 @@ def build_forecast_dataset_v2(
     by_group_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
         by_group_records[_group_id(record)].append(record)
+    held_out_group = held_out_group.strip() if held_out_group else None
+    if held_out_group is not None:
+        if held_out_group not in by_group_records:
+            raise ValueError(f"held_out_group not found in source windows: {held_out_group}")
+        if len(by_group_records) < 2:
+            raise ValueError("leave-group-out evaluation requires at least two groups")
     split_by_group: dict[str, dict[str, list[_Sample]]] = {}
     for group_id, group_records in sorted(by_group_records.items()):
         samples = _make_group_samples(
@@ -439,13 +447,23 @@ def build_forecast_dataset_v2(
         )
         if not samples:
             raise ValueError(f"group {group_id} has no contiguous multi-horizon samples")
-        split = _split_group_samples(
-            samples,
-            train_ratio=train_ratio,
-            val_ratio=val_ratio,
-            purge_gap_steps=purge,
-        )
-        _assert_temporal_isolation(split)
+        if held_out_group is not None and group_id == held_out_group:
+            # Strict leave-group-out: the held group contributes nothing to
+            # feature selection, model fitting, validation, or MASE scaling.
+            split = {"train": [], "val": [], "test": samples}
+        else:
+            temporal = _split_group_samples(
+                samples,
+                train_ratio=train_ratio,
+                val_ratio=val_ratio,
+                purge_gap_steps=purge,
+            )
+            _assert_temporal_isolation(temporal)
+            split = (
+                {"train": temporal["train"], "val": temporal["val"], "test": []}
+                if held_out_group is not None
+                else temporal
+            )
         split_by_group[group_id] = split
 
     combined: dict[str, list[_Sample]] = {
@@ -456,6 +474,8 @@ def build_forecast_dataset_v2(
         ]
         for split in ("train", "val", "test")
     }
+    if any(not combined[split] for split in ("train", "val", "test")):
+        raise ValueError("forecast dataset split is empty after applying split policy")
     np = _np()
     arrays: dict[str, Any] = {}
     for split, samples in combined.items():
@@ -508,10 +528,28 @@ def build_forecast_dataset_v2(
     )
     ranges = {
         key: [float(value[0]), float(value[1])]
-        for key, value in (normalization_ranges or {}).items()
+        for key, value in {**DEFAULT_RANGES, **(normalization_ranges or {})}.items()
     }
-    rolling = _rolling_origin_manifest(split_by_group, rolling_origin_folds)
-    group_holdouts = _group_holdout_manifest(split_by_group)
+    rolling_source = {
+        group_id: split
+        for group_id, split in split_by_group.items()
+        if held_out_group is None or group_id != held_out_group
+    }
+    rolling = _rolling_origin_manifest(rolling_source, rolling_origin_folds)
+    group_holdouts = (
+        [
+            {
+                "held_out_group": held_out_group,
+                "train_groups": sorted(
+                    group_id for group_id in split_by_group if group_id != held_out_group
+                ),
+                "held_out_samples": len(split_by_group[held_out_group]["test"]),
+                "strict_training_exclusion": True,
+            }
+        ]
+        if held_out_group is not None
+        else _group_holdout_manifest(split_by_group)
+    )
     meta = {
         "schema": DATASET_SCHEMA,
         "source_windows": str(resolve_windows_path(windows_jsonl)),
@@ -523,7 +561,8 @@ def build_forecast_dataset_v2(
         "purge_gap_steps": purge,
         "train_ratio": train_ratio,
         "val_ratio": val_ratio,
-        "final_holdout": "test_newest_time",
+        "final_holdout": "leave_group_out" if held_out_group is not None else "test_newest_time",
+        "held_out_group": held_out_group,
         "feature_names": list(feature_names),
         "feature_manifest": feature_manifest,
         "target_names": list(target_names),
@@ -548,7 +587,8 @@ def build_forecast_dataset_v2(
         "promotion_policy": {
             "selection_split": "validation_or_rolling_origin_only",
             "final_holdout_must_remain_untouched": True,
-            "group_generalization_required_when_multiple_groups": bool(group_holdouts),
+            "group_generalization_required_when_multiple_groups": len(split_by_group) > 1,
+            "strict_group_holdout_dataset": held_out_group is not None,
             "field_accuracy_claim_allowed": False,
         },
     }
@@ -666,6 +706,7 @@ def regression_metrics_v2(
     predicted: Any,
     target_names: tuple[str, ...],
     mase_scale: Any,
+    normalization_ranges: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     np = _np()
     actual = np.asarray(actual, dtype=np.float64)
@@ -708,10 +749,20 @@ def regression_metrics_v2(
         out=np.full_like(target_mae, np.nan, dtype=np.float64),
         where=np.isfinite(scale) & (scale > 0),
     )
-    return {
+    out_of_range = (predicted < 0.0) | (predicted > 1.0)
+    result = {
         "overall_mae": float(np.mean(np.abs(error))),
         "overall_rmse": float(np.sqrt(np.mean(error * error))),
         "overall_mase": None if np.isnan(target_mase).all() else float(np.nanmean(target_mase)),
+        "prediction_range_diagnostics": {
+            "expected_normalized_range": [0.0, 1.0],
+            "silent_clipping_applied": False,
+            "overall_out_of_range_fraction": float(np.mean(out_of_range)),
+            "per_target_out_of_range_fraction": {
+                name: float(np.mean(out_of_range[:, :, index]))
+                for index, name in enumerate(target_names)
+            },
+        },
         "per_target": {
             name: {
                 "mae": float(target_mae[index]),
@@ -722,6 +773,119 @@ def regression_metrics_v2(
         },
         "per_horizon": per_horizon,
     }
+    ranges = normalization_ranges or {}
+    if all(name in ranges for name in target_names):
+        spans = np.asarray(
+            [float(ranges[name][1]) - float(ranges[name][0]) for name in target_names],
+            dtype=np.float64,
+        )
+        if np.any(spans <= 0):
+            raise ValueError("normalization ranges must have positive spans")
+        physical_error = error * spans.reshape(1, 1, -1)
+        physical_target_mae = np.mean(np.abs(physical_error), axis=(0, 1))
+        physical_target_rmse = np.sqrt(np.mean(physical_error * physical_error, axis=(0, 1)))
+        result["physical_units"] = {
+            "note": "Per-target values are in each target's native configured unit; no mixed-unit overall MAE/RMSE is reported.",
+            "per_target": {
+                name: {
+                    "mae": float(physical_target_mae[index]),
+                    "rmse": float(physical_target_rmse[index]),
+                    "range": [float(ranges[name][0]), float(ranges[name][1])],
+                }
+                for index, name in enumerate(target_names)
+            },
+            "per_horizon": {
+                str(horizon + 1): {
+                    name: {
+                        "mae": float(
+                            np.mean(np.abs(physical_error[:, horizon, index]))
+                        ),
+                        "rmse": float(
+                            np.sqrt(
+                                np.mean(physical_error[:, horizon, index] ** 2)
+                            )
+                        ),
+                    }
+                    for index, name in enumerate(target_names)
+                }
+                for horizon in range(actual.shape[1])
+            },
+        }
+    return result
+
+
+def calibrate_conformal_radius_v2(
+    actual: Any,
+    predicted: Any,
+    *,
+    coverage: float = 0.90,
+) -> Any:
+    """Finite-sample split-conformal absolute residual radius per horizon/target."""
+
+    np = _np()
+    actual = np.asarray(actual, dtype=np.float64)
+    predicted = np.asarray(predicted, dtype=np.float64)
+    if actual.shape != predicted.shape or actual.ndim != 3 or actual.shape[0] < 2:
+        raise ValueError("conformal calibration requires matching 3D arrays with >=2 samples")
+    if not 0.0 < coverage < 1.0:
+        raise ValueError("coverage must be in (0,1)")
+    residual = np.abs(actual - predicted)
+    n = residual.shape[0]
+    rank = min(n, max(1, int(math.ceil((n + 1) * coverage))))
+    ordered = np.sort(residual, axis=0)
+    return ordered[rank - 1]
+
+
+def interval_metrics_v2(
+    actual: Any,
+    predicted: Any,
+    radius: Any,
+    target_names: tuple[str, ...],
+    *,
+    normalization_ranges: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    np = _np()
+    actual = np.asarray(actual, dtype=np.float64)
+    predicted = np.asarray(predicted, dtype=np.float64)
+    radius = np.asarray(radius, dtype=np.float64)
+    if actual.shape != predicted.shape or actual.ndim != 3:
+        raise ValueError("interval metrics require matching [samples,horizon,targets] arrays")
+    if radius.shape != actual.shape[1:]:
+        raise ValueError("conformal radius shape must match [horizon,targets]")
+    covered = (actual >= predicted - radius[None, :, :]) & (
+        actual <= predicted + radius[None, :, :]
+    )
+    result = {
+        "overall_coverage": float(np.mean(covered)),
+        "mean_normalized_interval_width": float(np.mean(2.0 * radius)),
+        "per_target": {
+            name: {
+                "coverage": float(np.mean(covered[:, :, index])),
+                "mean_normalized_interval_width": float(np.mean(2.0 * radius[:, index])),
+            }
+            for index, name in enumerate(target_names)
+        },
+        "per_horizon": {
+            str(horizon + 1): {
+                name: {
+                    "coverage": float(np.mean(covered[:, horizon, index])),
+                    "normalized_interval_width": float(2.0 * radius[horizon, index]),
+                }
+                for index, name in enumerate(target_names)
+            }
+            for horizon in range(actual.shape[1])
+        },
+    }
+    ranges = normalization_ranges or {}
+    if all(name in ranges for name in target_names):
+        result["per_target_physical_mean_width"] = {
+            name: float(
+                np.mean(2.0 * radius[:, index])
+                * (float(ranges[name][1]) - float(ranges[name][0]))
+            )
+            for index, name in enumerate(target_names)
+        }
+    return result
 
 
 def _select_baseline_v2(data: dict[str, Any]) -> dict[str, Any]:
@@ -795,14 +959,40 @@ def evaluate_baselines_v2(dataset_npz: str | Path, output_json: str | Path | Non
         "selection": selection,
         "splits": {},
     }
+    predictions_by_split: dict[str, Any] = {}
     for split in ("train", "val", "test"):
         predictions = compose_selected_baseline_v2(data, split, selection)
+        predictions_by_split[split] = predictions
         result["splits"][split] = regression_metrics_v2(
             data[f"Y_{split}"],
             predictions,
             data["target_names_tuple"],
             data["mase_scale"],
+            data["meta"].get("normalization_ranges", {}),
         )
+    conformal_radius = calibrate_conformal_radius_v2(
+        data["Y_val"], predictions_by_split["val"], coverage=0.90
+    )
+    result["uncertainty"] = {
+        "method": "split_conformal_absolute_residual",
+        "calibration_split": "validation",
+        "target_coverage": 0.90,
+        "radius_normalized": conformal_radius.tolist(),
+        "validation": interval_metrics_v2(
+            data["Y_val"],
+            predictions_by_split["val"],
+            conformal_radius,
+            data["target_names_tuple"],
+            normalization_ranges=data["meta"].get("normalization_ranges", {}),
+        ),
+        "test": interval_metrics_v2(
+            data["Y_test"],
+            predictions_by_split["test"],
+            conformal_radius,
+            data["target_names_tuple"],
+            normalization_ranges=data["meta"].get("normalization_ranges", {}),
+        ),
+    }
     if output_json is not None:
         output = Path(output_json)
         output.parent.mkdir(parents=True, exist_ok=True)

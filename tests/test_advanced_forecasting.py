@@ -89,6 +89,8 @@ class AdvancedForecastingTests(unittest.TestCase):
                         dataset,
                         output / "model.json",
                     )
+                    self.assertIn("uncertainty", metrics)
+                    self.assertIn("physical_units", metrics["splits"]["test"])
                     self.assertIn(metrics["promotion_gate"]["status"], {"EXPERIMENTAL", "PROMISING_HOST_ONLY"})
                     self.assertFalse(metrics["promotion_gate"]["field_generalization_verified"])
                     self.assertFalse(metrics["promotion_gate"]["pi_shadow_verified"])
