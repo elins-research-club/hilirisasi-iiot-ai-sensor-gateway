@@ -157,6 +157,17 @@ Forecast memakai manifest
 window 16, cadence 60 s, dan target CO2. Cadence/feature/hash mismatch membuat
 runtime abstain; model tidak boleh dipaksa.
 
+**Model-quality override 3 Oktober 2026:** audit ulang source capture menemukan
+bahwa checkpoint CO2 historis dilatih pada raw cadence median sekitar `0.55 s`,
+bukan bucket live `60 s`; horizon training 5 langkah karena itu sekitar
+`2.75 s`, bukan `300 s`. Artifact historis juga membawa normalization minimum
+`-1`, yang sekarang diketahui sebagai sentinel error dan sudah dibuang oleh
+builder current. Manifest current diturunkan menjadi `EXPERIMENTAL` dan tetap
+`shadow_only`. Existing 25 September `available_shadow` hanya membuktikan
+runtime/plumbing. Sebelum model-quality promotion, source harus di-resample ke
+cadence runtime dan dikumpulkan cukup panjang untuk window 16 + horizon 5,
+kemudian baseline/challenger gate dijalankan ulang.
+
 Pada `sensor_ai.v2`, hasil forecast shadow ikut dibawa di `ai.forecast`
 beserta nilai prediksi, horizon, model/runtime provenance, readiness, dan
 latency. Status yang diharapkan:

@@ -22,6 +22,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_SCHEMA = "iiot.ai_sensor.bakeoff_runner_state.v1"
+DEFAULT_MAX_NORMALIZATION_CLIP_FRACTION = 0.05
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,45 @@ def outputs_ready(outputs: list[Path]) -> bool:
     if not outputs:
         return True
     return all(path.is_file() and path.stat().st_size > 0 for path in outputs)
+
+
+def normalization_clipping_gate(
+    report: dict[str, Any],
+    *,
+    max_clip_fraction: float,
+) -> dict[str, Any]:
+    """Evaluate preprocessing clipping before any model is trained.
+
+    The gate is deliberately feature-wise as well as global: a low aggregate
+    clip rate must not hide one sensor channel that is almost always clipped.
+    """
+
+    if not 0.0 <= max_clip_fraction <= 1.0:
+        raise ValueError("max_clip_fraction must be in [0, 1]")
+    if report.get("schema") != "iiot.ai_sensor.normalization_report.v1":
+        return {
+            "status": "FAIL",
+            "reason": "normalization_report_missing_or_unsupported",
+            "max_clip_fraction": max_clip_fraction,
+        }
+    overall = float(report.get("clip_fraction", 0.0))
+    fields = report.get("fields", {})
+    field_fractions = {
+        str(name): float(item.get("clip_fraction", 0.0))
+        for name, item in fields.items()
+        if isinstance(item, dict) and int(item.get("seen", 0)) > 0
+    }
+    worst_field = max(field_fractions, key=field_fractions.get) if field_fractions else None
+    worst_fraction = field_fractions.get(worst_field, 0.0) if worst_field else 0.0
+    passed = overall <= max_clip_fraction and worst_fraction <= max_clip_fraction
+    return {
+        "status": "PASS" if passed else "FAIL",
+        "reason": None if passed else "normalization_clipping_exceeds_gate",
+        "max_clip_fraction": max_clip_fraction,
+        "overall_clip_fraction": overall,
+        "worst_field": worst_field,
+        "worst_field_clip_fraction": worst_fraction,
+    }
 
 
 class Runner:
@@ -588,6 +628,29 @@ def prepare_lane(runner: Runner, lane: Lane, args: argparse.Namespace) -> bool:
     )
     if runner.dry_run:
         return True
+    normalization_path = lane.processed_dir / "normalization_report.json"
+    if not normalization_path.is_file():
+        clip_gate = normalization_clipping_gate(
+            {}, max_clip_fraction=args.max_normalization_clip_fraction
+        )
+    else:
+        clip_gate = normalization_clipping_gate(
+            json.loads(normalization_path.read_text(encoding="utf-8-sig")),
+            max_clip_fraction=args.max_normalization_clip_fraction,
+        )
+    runner.state.setdefault("normalization_gates", {})[lane.slug] = clip_gate
+    if clip_gate["status"] != "PASS":
+        print(
+            f"BLOCK lane {lane.slug}: normalization clipping gate FAIL "
+            f"(overall={clip_gate.get('overall_clip_fraction')}, "
+            f"worst={clip_gate.get('worst_field')}:{clip_gate.get('worst_field_clip_fraction')})"
+        )
+        runner.state["blocked_lanes"][lane.slug] = {
+            "reason": "normalization_clipping_gate_fail",
+            "normalization_gate": clip_gate,
+        }
+        runner.save()
+        return False
     meta = json.loads(lane.meta_path.read_text(encoding="utf-8"))
     quality = meta.get("data_quality", {})
     if quality.get("status") == "FAIL":
@@ -691,6 +754,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--learning-rate", type=float, default=0.001)
     parser.add_argument("--horizon", type=int, default=5)
     parser.add_argument("--purge-gap", type=int, default=5)
+    parser.add_argument(
+        "--max-normalization-clip-fraction",
+        type=float,
+        default=DEFAULT_MAX_NORMALIZATION_CLIP_FRACTION,
+        help=(
+            "block a lane before training when overall or any feature clipping "
+            "exceeds this fraction (default: 0.05)"
+        ),
+    )
     parser.add_argument("--seeds", type=parse_csv_ints, default=(42, 43, 44))
     parser.add_argument("--lanes", type=parse_csv_strings, default=("gary", "uci", "fidas", "sim"))
     parser.add_argument("--skip-download", action="store_true")
@@ -741,6 +813,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit(f"positive arguments required: {invalid}")
     if args.purge_gap < 0 or args.learning_rate <= 0:
         raise SystemExit("purge-gap must be non-negative and learning-rate positive")
+    if not 0.0 <= args.max_normalization_clip_fraction <= 1.0:
+        raise SystemExit("max-normalization-clip-fraction must be in [0, 1]")
 
 
 def main(argv: list[str] | None = None) -> int:

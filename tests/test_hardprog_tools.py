@@ -73,10 +73,103 @@ class HardprogForecastToolTests(unittest.TestCase):
                 self.assertAlmostEqual(float(data["cadence_seconds"][0]), 1.0)
                 self.assertGreater(len(data["X_val"]), 0)
                 self.assertGreater(len(data["X_test"]), 0)
+                self.assertEqual(len(str(data["feature_schema_sha256"][0])), 64)
+                manifest = json.loads(str(data["feature_manifest_json"][0]))
+                self.assertEqual(manifest["selection_split"], "train")
+                self.assertEqual(manifest["schema_sha256"], str(data["feature_schema_sha256"][0]))
+
+    def test_builder_feature_selection_does_not_look_at_future_splits(self):
+        builder = _load_script("build_hardprog_forecast_npz.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (root / "data_co2.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle, delimiter=";")
+                writer.writerow(["timestamp_ms", "co2_ppm"])
+                for index in range(600):
+                    # Constant through the train region, varying only in the
+                    # future. A leak-prone selector would retain this target.
+                    value = 500.0 if index < 420 else 500.0 + (index % 17)
+                    writer.writerow([index * 1000, value])
+            with self.assertRaisesRegex(ValueError, "no usable features"):
+                builder.build_npz(
+                    "data_co2",
+                    root,
+                    root / "co2.npz",
+                    root / "co2.json",
+                )
 
     def test_tof_is_not_an_environmental_forecast_lane(self):
         builder = _load_script("build_hardprog_forecast_npz.py")
         self.assertNotIn("data_tof_1", builder.LANES)
+
+    def test_builder_excludes_co2_error_sentinel_from_training_provenance(self):
+        builder = _load_script("build_hardprog_forecast_npz.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csv_path = root / "data_co2.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle, delimiter=";")
+                writer.writerow(["timestamp_ms", "co2_ppm"])
+                for index in range(600):
+                    value = -1.0 if index == 100 else 400.0 + (index % 17)
+                    writer.writerow([index * 1000, value])
+            meta = builder.build_npz(
+                "data_co2",
+                root,
+                root / "co2.npz",
+                root / "co2.json",
+            )
+            self.assertEqual(meta["n_points"], 599)
+            self.assertEqual(
+                meta["source_quality"]["invalid_sentinel_counts"]["co2_ppm"], 1
+            )
+            self.assertEqual(
+                meta["source_quality"]["dropped_all_missing_or_invalid_rows"], 1
+            )
+            self.assertGreaterEqual(meta["normalization_ranges"]["co2_ppm"][0], 400.0)
+
+    def test_builder_rejects_runtime_cadence_relabeling(self):
+        builder = _load_script("build_hardprog_forecast_npz.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csv_path = root / "data_co2.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle, delimiter=";")
+                writer.writerow(["timestamp_ms", "co2_ppm"])
+                for index in range(600):
+                    writer.writerow([index * 1000, 400.0 + (index % 17)])
+            with self.assertRaisesRegex(ValueError, "incompatible with expected runtime cadence"):
+                builder.build_npz(
+                    "data_co2",
+                    root,
+                    root / "co2.npz",
+                    root / "co2.json",
+                    expected_runtime_cadence_sec=60.0,
+                )
+
+    def test_cli_runtime_cadence_gate_exits_nonzero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with (root / "data_co2.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle, delimiter=";")
+                writer.writerow(["timestamp_ms", "co2_ppm"])
+                for index in range(600):
+                    writer.writerow([index * 1000, 400.0 + (index % 17)])
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/build_hardprog_forecast_npz.py"),
+                    "--csv-dir", str(root),
+                    "--out-dir", str(root / "out"),
+                    "--expected-runtime-cadence-sec", "60",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("runtime cadence gate failed", result.stderr)
 
     def test_direct_builder_invocation_works_without_pythonpath(self):
         with tempfile.TemporaryDirectory() as tmp:

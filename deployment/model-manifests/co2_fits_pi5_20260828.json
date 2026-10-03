@@ -13,14 +13,19 @@
   "expected_cadence_sec": 60.0,
   "horizon_steps": 5,
   "horizon_duration_seconds": 300.0,
+  "training_data_cadence_sec_observed": 0.55,
+  "training_horizon_duration_seconds_observed": 2.75,
+  "runtime_cadence_compatibility": "MISMATCH",
   "normalization_ranges": {
     "co2_ppm": [-1.0, 5000.0]
   },
-  "readiness": "PROMISING",
+  "readiness": "EXPERIMENTAL",
   "deployment_mode": "shadow_only",
-  "source_evidence": "models/pi5/data_co2/fits + docs/benchmark-raspi5-forecast-2026-08-28.md",
+  "source_evidence": "models/pi5/data_co2/fits + docs/benchmark-raspi5-forecast-2026-08-28.md + ../Project Context/AI_SENSOR_MODEL_PIPELINE_AUDIT_2026-10-03.md",
   "limitations": [
     "trained/evaluated on 2026-08-28 internal HardProg CO2 capture, not current Node 1 field campaign",
+    "2026-10-03 re-audit measured source capture median cadence 0.55 s, while live inference consumes 60 s resampled buckets; the historical 5-step training horizon therefore represents about 2.75 s, not the 300 s runtime horizon",
+    "historical training metadata used normalization range [-1, 5000] even though -1 is an invalid CO2 error sentinel; current dataset builder removes this sentinel and requires retraining before model-quality promotion",
     "prediction must not drive operational alert without current real-data re-evaluation",
     "runtime must abstain on cadence, feature, manifest, or checksum mismatch"
   ]

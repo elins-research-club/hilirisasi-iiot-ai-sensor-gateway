@@ -211,6 +211,13 @@ $PY run_gateway.py prepare-forecast-dataset \
 
 ## Baseline dan Model Evaluation
 
+> **Model audit 3 Oktober 2026:** evaluator sekarang memakai MASE scale dari
+> training split, LSTM hanya mendapat top-level `PASS` bila baseline/data-quality
+> gate lulus, repeated-seed bake-off memblokir excessive normalization clipping,
+> dan HardProg feature selection/schema hash bersifat train-only. Riset model
+> terbaru + implementation plan:
+> `docs/AI_SENSOR_MODEL_RESEARCH_AND_IMPLEMENTATION_PLAN_2026-10-03.md`.
+
 Model tetap **EXPERIMENTAL**:
 
 - LastValue;

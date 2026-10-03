@@ -230,7 +230,10 @@ class ForecastingTests(unittest.TestCase):
             self.assertTrue(Path(train['model_path']).exists())
 
             metrics = evaluate_lstm_forecast(dataset, train['model_path'], model_dir, device='cpu', eval_batch_size=5)
-            self.assertEqual(metrics['status'], 'PASS')
+            self.assertEqual(
+                metrics['status'],
+                'PASS' if metrics['baseline_gate']['passed'] else 'FAIL_OR_EXPERIMENTAL',
+            )
             self.assertEqual(metrics['eval_batch_size'], 5)
             self.assertEqual(metrics['data_status'], 'PASS')
             self.assertIn(metrics['baseline_comparison_status'], {'BEATS_BASELINE', 'UNDER_BASELINE', 'MIXED'})
@@ -238,6 +241,8 @@ class ForecastingTests(unittest.TestCase):
             self.assertIn('last_value_baseline', metrics['splits']['test'])
             self.assertIn('baseline_delta', metrics['splits']['test'])
             self.assertIn('denormalized', metrics['splits']['test']['lstm'])
+            self.assertIn('overall_mase', metrics['splits']['test']['lstm'])
+            self.assertEqual(metrics['mase_scale']['source_split'], 'train')
             self.assertIn('rmse_skill_score', metrics['splits']['test']['baseline_delta']['per_target'][TARGET_NAMES[0]])
             self.assertEqual(metrics['nan_count'], 0)
             self.assertEqual(metrics['inf_count'], 0)

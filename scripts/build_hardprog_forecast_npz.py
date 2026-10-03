@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -129,7 +130,13 @@ def _make_windows(values: np.ndarray, window_size: int, horizon: int) -> tuple[n
 
 def build_npz(lane: str, csv_dir: Path, out_npz: Path, out_meta: Path,
               window_size: int = 16, horizon: int = 5,
-              val_frac: float = 0.15, test_frac: float = 0.15) -> dict:
+              val_frac: float = 0.15, test_frac: float = 0.15,
+              expected_runtime_cadence_sec: float | None = None,
+              cadence_tolerance_fraction: float = 0.20) -> dict:
+    if expected_runtime_cadence_sec is not None and expected_runtime_cadence_sec <= 0:
+        raise ValueError("expected_runtime_cadence_sec must be positive")
+    if not 0.0 <= cadence_tolerance_fraction < 1.0:
+        raise ValueError("cadence_tolerance_fraction must be in [0, 1)")
     cfg = LANES[lane]
     rows = read_csv(csv_dir / cfg["file"], cfg["delim"])
     features = cfg["features"]
@@ -137,40 +144,96 @@ def build_npz(lane: str, csv_dir: Path, out_npz: Path, out_meta: Path,
     # gather per-feature series, dropping rows where all features are None
     series = {f: [] for f in features}
     ts = []
+    invalid_sentinel_counts = {f: 0 for f in features}
+    dropped_all_missing_or_invalid_rows = 0
     for r in rows:
-        vals = [to_float(r.get(cfg["colmap"][f], "")) for f in features]
+        raw_vals = [to_float(r.get(cfg["colmap"][f], "")) for f in features]
         # Mark lane-specific sensor error sentinels as invalid before
         # train-only imputation/normalization.
-        vals = [
-            (None if is_invalid(v, cfg.get("invalid_values", {}).get(f)) else v)
-            for f, v in zip(features, vals)
-        ]
+        vals = []
+        for f, value in zip(features, raw_vals):
+            if is_invalid(value, cfg.get("invalid_values", {}).get(f)):
+                invalid_sentinel_counts[f] += 1
+                vals.append(None)
+            else:
+                vals.append(value)
         if all(v is None for v in vals):
+            dropped_all_missing_or_invalid_rows += 1
             continue
         for f, v in zip(features, vals):
             series[f].append(v if v is not None else np.nan)
         t = to_float(r.get(list(r.keys())[0], ""))
         ts.append(t if t is not None else np.nan)
     n = len(ts)
-    # drop features that are constant or mostly missing
+    # Feature/target availability decisions are train-only.  Looking at
+    # validation/test here would leak future distribution information into the
+    # schema even before model fitting.
+    train_feature_end = int(n * (1 - val_frac - test_frac))
+    if train_feature_end < 1:
+        raise ValueError(f"lane {lane}: empty training segment")
     keep = []
+    dropped_features: dict[str, str] = {}
     for f in features:
         arr = np.array(series[f], dtype=float)
-        finite = arr[~np.isnan(arr)]
+        train_values = arr[:train_feature_end]
+        finite = train_values[~np.isnan(train_values)]
         if len(finite) < 30:
-            print(f"  [skip] {f}: only {len(finite)} finite values")
+            reason = f"train_finite_count_{len(finite)}_below_30"
+            dropped_features[f] = reason
+            print(f"  [skip] {f}: only {len(finite)} finite train values")
             continue
-        if np.nanmax(arr) - np.nanmin(arr) < 1e-9:
-            print(f"  [skip] {f}: constant")
+        if np.nanmax(finite) - np.nanmin(finite) < 1e-9:
+            dropped_features[f] = "train_constant"
+            print(f"  [skip] {f}: constant in train")
             continue
         keep.append(f)
     if not keep:
         raise ValueError(f"lane {lane}: no usable features")
+    feature_manifest_payload = {
+        "ordered_features": keep,
+        "dropped_features": dropped_features,
+        "selection_split": "train",
+    }
+    feature_schema_sha256 = hashlib.sha256(
+        json.dumps(
+            feature_manifest_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    feature_manifest = {
+        **feature_manifest_payload,
+        "schema_sha256": feature_schema_sha256,
+    }
     # build matrix
     X = np.column_stack([np.array(series[f], dtype=float) for f in keep])
     if len(ts) != n or any(not np.isfinite(value) for value in ts):
         raise ValueError(f"lane {lane}: timestamp column contains missing/non-finite values")
     cadence_seconds = infer_cadence_seconds(ts)
+    capture_duration_seconds = (max(ts) - min(ts)) / 1000.0 if len(ts) > 1 else 0.0
+    runtime_cadence_gate = {
+        "status": "NOT_REQUESTED",
+        "observed_cadence_seconds": cadence_seconds,
+        "expected_runtime_cadence_seconds": expected_runtime_cadence_sec,
+        "tolerance_fraction": cadence_tolerance_fraction,
+    }
+    if expected_runtime_cadence_sec is not None:
+        tolerance_seconds = expected_runtime_cadence_sec * cadence_tolerance_fraction
+        delta_seconds = abs(cadence_seconds - expected_runtime_cadence_sec)
+        runtime_cadence_gate.update(
+            {
+                "status": "PASS" if delta_seconds <= tolerance_seconds else "FAIL",
+                "tolerance_seconds": tolerance_seconds,
+                "absolute_delta_seconds": delta_seconds,
+            }
+        )
+        if delta_seconds > tolerance_seconds:
+            raise ValueError(
+                f"lane {lane}: observed cadence {cadence_seconds:g}s is incompatible with "
+                f"expected runtime cadence {expected_runtime_cadence_sec:g}s "
+                f"(tolerance {cadence_tolerance_fraction:.0%}); resample the source to the "
+                "runtime cadence before training instead of relabeling the horizon"
+            )
     purge_gap_steps = horizon
     n_train_points = int(n * (1 - val_frac - test_frac))
     n_val_points = int(n * val_frac)
@@ -219,9 +282,16 @@ def build_npz(lane: str, csv_dir: Path, out_npz: Path, out_meta: Path,
         "note": meta_cadence_note,
         "source": "per-sensor real capture; uptime milliseconds",
         "cadence_seconds": cadence_seconds,
+        "capture_duration_seconds": capture_duration_seconds,
         "positive_delta_count": sum(
             later > earlier for earlier, later in zip(ts, ts[1:])
         ),
+    }
+    source_quality = {
+        "source_row_count": len(rows),
+        "usable_point_count": int(n),
+        "dropped_all_missing_or_invalid_rows": dropped_all_missing_or_invalid_rows,
+        "invalid_sentinel_counts": invalid_sentinel_counts,
     }
     meta = {
         "lane": lane, "source": str(csv_dir / cfg["file"]),
@@ -233,6 +303,9 @@ def build_npz(lane: str, csv_dir: Path, out_npz: Path, out_meta: Path,
         "split": {"train": len(X_train), "val": len(X_val), "test": len(X_test)},
         "cadence_note": meta_cadence_note,
         "calibration_note": "uncalibrated raw CSV (hardprog team)",
+        "source_quality": source_quality,
+        "runtime_cadence_gate": runtime_cadence_gate,
+        "feature_manifest": feature_manifest,
         "data_quality": data_quality,
     }
     np.savez(
@@ -249,9 +322,10 @@ def build_npz(lane: str, csv_dir: Path, out_npz: Path, out_meta: Path,
         horizon_duration_seconds=np.array([cadence_seconds * horizon], dtype=np.float64),
         window_size=np.array([window_size], dtype=np.int64),
         purge_gap_steps=np.array([purge_gap_steps], dtype=np.int64),
+        feature_schema_sha256=np.array([feature_schema_sha256], dtype="U64"),
         normalization_ranges_json=np.array([json.dumps(norm_ranges)], dtype="U1024"),
         dataset_meta_json=np.array([json.dumps(meta)], dtype="U8192"),
-        feature_manifest_json=np.array([json.dumps({"features": keep})], dtype="U1024"),
+        feature_manifest_json=np.array([json.dumps(feature_manifest, sort_keys=True)], dtype="U2048"),
         data_quality_json=np.array([json.dumps(data_quality, sort_keys=True)], dtype="U8192"),
         cadence_diagnostics_json=np.array([json.dumps(cadence, sort_keys=True)], dtype="U2048"),
     )
@@ -260,17 +334,28 @@ def build_npz(lane: str, csv_dir: Path, out_npz: Path, out_meta: Path,
     return meta
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv-dir", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--window-size", type=int, default=16)
     ap.add_argument("--horizon", type=int, default=5)
+    ap.add_argument(
+        "--expected-runtime-cadence-sec",
+        type=float,
+        default=None,
+        help=(
+            "fail closed unless the source cadence already matches the intended runtime cadence; "
+            "resample first when this gate fails"
+        ),
+    )
+    ap.add_argument("--cadence-tolerance-fraction", type=float, default=0.20)
     args = ap.parse_args()
     csv_dir = Path(args.csv_dir)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     results = {}
+    failures = []
     for lane in LANES:
         print(f"=== {lane} ===")
         source = csv_dir / LANES[lane]["file"]
@@ -283,13 +368,24 @@ def main():
                 out_dir / f"{lane}_dataset.npz",
                 out_dir / f"{lane}_meta.json",
                 window_size=args.window_size, horizon=args.horizon,
+                expected_runtime_cadence_sec=args.expected_runtime_cadence_sec,
+                cadence_tolerance_fraction=args.cadence_tolerance_fraction,
             )
             results[lane] = meta
         except ValueError as e:
             print(f"  !! {e}")
+            failures.append({"lane": lane, "error": str(e)})
     (out_dir / "build_summary.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
     print("\nDONE")
+    if args.expected_runtime_cadence_sec is not None and failures:
+        print(
+            "runtime cadence gate failed for: "
+            + ", ".join(item["lane"] for item in failures),
+            file=sys.stderr,
+        )
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

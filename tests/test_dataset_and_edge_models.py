@@ -291,6 +291,8 @@ class EdgeForecastTests(unittest.TestCase):
                 self.assertIn(metrics["status"], {"PASS", "FAIL_OR_EXPERIMENTAL"})
                 self.assertIn("last_value", metrics["splits"]["test"]["baselines"])
                 self.assertIn("seasonal_naive", metrics["splits"]["test"]["baselines"])
+                self.assertIn("overall_mase", metrics["splits"]["test"]["model"])
+                self.assertEqual(metrics["mase_scale"]["source_split"], "train")
                 predictions = predict_edge_forecast(
                     dataset,
                     training["model_path"],

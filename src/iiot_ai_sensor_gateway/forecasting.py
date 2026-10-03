@@ -855,16 +855,55 @@ def _load_model(model_path: str | Path, device: str = "auto"):
     return model, checkpoint, resolved_device
 
 
-def _regression_metrics(actual, predicted, target_names: tuple[str, ...]) -> dict[str, Any]:
+def _mase_scale(training_actual: Any, *, lag: int = 1) -> Any:
+    np = _require_numpy()
+    if lag < 1:
+        raise ValueError("MASE lag must be >= 1")
+    if training_actual.ndim != 2:
+        raise ValueError("MASE training_actual must be [samples, targets]")
+    if training_actual.shape[0] <= lag:
+        return np.full(training_actual.shape[1], np.nan, dtype=np.float64)
+    return np.mean(
+        np.abs(training_actual[lag:] - training_actual[:-lag]), axis=0
+    )
+
+
+def _regression_metrics(
+    actual,
+    predicted,
+    target_names: tuple[str, ...],
+    *,
+    mase_scale: Any | None = None,
+) -> dict[str, Any]:
     np = _require_numpy()
     error = predicted - actual
     mae = np.mean(np.abs(error), axis=0)
     rmse = np.sqrt(np.mean(error * error, axis=0))
+    denominator = (
+        np.asarray(mase_scale, dtype=np.float64)
+        if mase_scale is not None
+        else np.full(actual.shape[1], np.nan, dtype=np.float64)
+    )
+    if denominator.shape != (actual.shape[1],):
+        raise ValueError("MASE scale shape does not match target count")
+    mase = np.divide(
+        mae,
+        denominator,
+        out=np.full_like(mae, np.nan, dtype=np.float64),
+        where=np.isfinite(denominator) & (denominator > 0),
+    )
     return {
         "overall_mae": float(np.mean(mae)),
         "overall_rmse": float(np.mean(rmse)),
+        "overall_mase": None if np.isnan(mase).all() else float(np.nanmean(mase)),
         "per_target": {
-            name: {"mae": float(mae[index]), "rmse": float(rmse[index])}
+            name: {
+                "mae": float(mae[index]),
+                "rmse": float(rmse[index]),
+                "mase": None
+                if math.isnan(float(mase[index]))
+                else float(mase[index]),
+            }
             for index, name in enumerate(target_names)
         },
     }
@@ -1001,6 +1040,26 @@ def evaluate_lstm_forecast(
     if eval_batch_size < 1:
         raise ValueError("eval_batch_size must be a positive integer")
 
+    mase_lag = seasonal_period if seasonal_period > 0 else 1
+    train_actual = data["y_train"].astype("float32")
+    train_actual_denorm = _denormalize_matrix(
+        train_actual, target_names, ranges
+    )
+    normalized_mase_scale = _mase_scale(train_actual, lag=mase_lag)
+    denormalized_mase_scale = _mase_scale(train_actual_denorm, lag=mase_lag)
+    result["mase_scale"] = {
+        "source_split": "train",
+        "lag": mase_lag,
+        "normalized": [
+            None if not math.isfinite(float(value)) else float(value)
+            for value in normalized_mase_scale
+        ],
+        "denormalized": [
+            None if not math.isfinite(float(value)) else float(value)
+            for value in denormalized_mase_scale
+        ],
+    }
+
     def predict_batches(x: Any) -> Any:
         preds = []
         with torch.no_grad():
@@ -1028,20 +1087,33 @@ def evaluate_lstm_forecast(
         split_actual[split] = y
         raw_pred = predict_batches(x)
         pred = _apply_forecast_strategy(raw_pred, x, target_indices, forecast_strategy)
-        lstm_metrics = _regression_metrics(y, pred, target_names)
+        lstm_metrics = _regression_metrics(
+            y, pred, target_names, mase_scale=normalized_mase_scale
+        )
         y_denorm = _denormalize_matrix(y, target_names, ranges)
         pred_denorm = _denormalize_matrix(pred, target_names, ranges)
-        lstm_metrics["denormalized"] = _regression_metrics(y_denorm, pred_denorm, target_names)
+        lstm_metrics["denormalized"] = _regression_metrics(
+            y_denorm,
+            pred_denorm,
+            target_names,
+            mase_scale=denormalized_mase_scale,
+        )
         baseline_metrics: dict[str, Any] = {}
         for name, item in candidates.items():
             if not item["applicable"] or item["predictions"] is None:
                 baseline_metrics[name] = {"applicable": False, "reason": item["reason"]}
                 continue
-            metrics = _regression_metrics(y, item["predictions"], target_names)
+            metrics = _regression_metrics(
+                y,
+                item["predictions"],
+                target_names,
+                mase_scale=normalized_mase_scale,
+            )
             metrics["denormalized"] = _regression_metrics(
                 y_denorm,
                 _denormalize_matrix(item["predictions"], target_names, ranges),
                 target_names,
+                mase_scale=denormalized_mase_scale,
             )
             baseline_metrics[name] = {"applicable": True, "reason": None, **metrics}
         last_value_metrics = baseline_metrics["last_value"]
@@ -1060,11 +1132,17 @@ def evaluate_lstm_forecast(
     result["baseline_selection"] = selection
     for split in ("train", "val", "test"):
         selected = compose_selected_baseline(split_candidates[split], selection, target_names)
-        baseline_metrics = _regression_metrics(split_actual[split], selected, target_names)
+        baseline_metrics = _regression_metrics(
+            split_actual[split],
+            selected,
+            target_names,
+            mase_scale=normalized_mase_scale,
+        )
         baseline_metrics["denormalized"] = _regression_metrics(
             _denormalize_matrix(split_actual[split], target_names, ranges),
             _denormalize_matrix(selected, target_names, ranges),
             target_names,
+            mase_scale=denormalized_mase_scale,
         )
         lstm_metrics = result["splits"][split]["lstm"]
         result["splits"][split]["validation_selected_baseline"] = baseline_metrics
@@ -1116,7 +1194,9 @@ def evaluate_lstm_forecast(
     else:
         result["model_readiness"] = "EXPERIMENTAL"
     result["quality_gate_passed"] = quality_passed
-    result["status"] = "PASS" if result["baseline_gate"]["passed"] else result["data_status"]
+    result["status"] = (
+        "PASS" if result["baseline_gate"]["passed"] else "FAIL_OR_EXPERIMENTAL"
+    )
     output_path = Path(model_path).parent if output_dir is None else Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     metrics_path = output_path / "metrics.json"

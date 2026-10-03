@@ -126,6 +126,38 @@ class BakeoffHelperTests(unittest.TestCase):
         runner_module = _load_script("laptop_bakeoff_runner.py")
         self.assertTrue(runner_module.outputs_ready([]))
 
+    def test_normalization_clipping_gate_checks_worst_feature(self):
+        runner_module = _load_script("laptop_bakeoff_runner.py")
+        report = {
+            "schema": "iiot.ai_sensor.normalization_report.v1",
+            "clip_fraction": 0.01,
+            "fields": {
+                "temperature_c": {"seen": 100, "clip_fraction": 0.0},
+                "co2_ppm": {"seen": 100, "clip_fraction": 0.20},
+            },
+        }
+        result = runner_module.normalization_clipping_gate(
+            report, max_clip_fraction=0.05
+        )
+        self.assertEqual(result["status"], "FAIL")
+        self.assertEqual(result["worst_field"], "co2_ppm")
+        self.assertAlmostEqual(result["worst_field_clip_fraction"], 0.20)
+
+    def test_normalization_clipping_gate_passes_clean_lane(self):
+        runner_module = _load_script("laptop_bakeoff_runner.py")
+        report = {
+            "schema": "iiot.ai_sensor.normalization_report.v1",
+            "clip_fraction": 0.01,
+            "fields": {
+                "temperature_c": {"seen": 100, "clip_fraction": 0.01},
+                "co2_ppm": {"seen": 100, "clip_fraction": 0.02},
+            },
+        }
+        result = runner_module.normalization_clipping_gate(
+            report, max_clip_fraction=0.05
+        )
+        self.assertEqual(result["status"], "PASS")
+
     def test_lane_windows_match_locked_bakeoff_methodology(self):
         runner_module = _load_script("laptop_bakeoff_runner.py")
         lanes = runner_module.lane_definitions()

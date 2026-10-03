@@ -24,6 +24,13 @@ class IIoTGWDeploymentTests(unittest.TestCase):
             manifest["source_checkpoint_sha256"],
             "def7e300f77a2c06804cf781bd472b9d96092e4ed73415557188da278795755d",
         )
+        self.assertEqual(manifest["deployment_mode"], "shadow_only")
+        self.assertEqual(manifest["readiness"], "EXPERIMENTAL")
+        self.assertEqual(manifest["runtime_cadence_compatibility"], "MISMATCH")
+        self.assertNotEqual(
+            manifest["training_data_cadence_sec_observed"],
+            manifest["expected_cadence_sec"],
+        )
 
     def test_gateway_deploy_does_not_pull_ml_or_cuda_stack(self) -> None:
         script = (ROOT / "deployment/iiotgw/deploy-via-tailscale.sh").read_text(

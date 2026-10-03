@@ -1,5 +1,11 @@
 # Riset Model Time-Series Edge untuk AI Sensor
 
+> **Research refresh — 3 Oktober 2026:** dokumen Juli ini tetap menjadi
+> background/historical methodology. Audit current, landscape model 2026,
+> koreksi evaluator, shortlist prioritas, dan implementation plan sekarang ada
+> di `AI_SENSOR_MODEL_RESEARCH_AND_IMPLEMENTATION_PLAN_2026-10-03.md`. Ranking
+> historis di bawah tidak boleh dibaca sebagai deployment winner current.
+
 Tanggal keputusan awal: 10 Juli 2026. Methodology hardening: 11 Juli 2026.
 
 ## Batas Kebenaran

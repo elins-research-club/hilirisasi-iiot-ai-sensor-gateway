@@ -6,6 +6,19 @@
 **Lingkungan:** Python 3.11.2, torch 2.13.0+cpu, numpy 1.26.4, river 0.22.0
 **Konvensi:** label `raspberry_pi_5` hanya sah untuk artifact yang dibuat oleh eksekusi Pi 5 fisik; benchmark lama di bawah adalah evidence lokal historis dan harus dibaca bersama provenance dataset/kode yang dipakai.
 
+> **Re-audit model 3 Oktober 2026:** benchmark Pi 5 di dokumen ini tetap sah
+> sebagai bukti eksekusi hardware, latency, resource, dan reproducibility pada
+> dataset 28 Agustus. Namun label kualitas model CO2 `PROMISING` **tidak lagi
+> berlaku untuk interpretasi deployment live 60 detik**. Raw capture CO2
+> memiliki median cadence `0.55 s`, durasi sekitar `552.905 s`, dan empat
+> sentinel error `-1`. Artifact training historis memakai normalization range
+> `[-1, 5000]` serta kemudian dideploy pada bucket `60 s` dengan horizon
+> `300 s`. Dengan demikian ada mismatch temporal: horizon training 5 langkah
+> raw sekitar `2.75 s`, bukan 5 menit. Current source manifest diturunkan ke
+> `EXPERIMENTAL`/`shadow_only` sampai dataset 60-s yang cukup panjang dibangun
+> dan model dilatih + dievaluasi ulang. Detail audit:
+> `Project Context/AI_SENSOR_MODEL_PIPELINE_AUDIT_2026-10-03.md`.
+
 ---
 
 ## 1. Ringkasan Eksekusi

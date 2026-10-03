@@ -99,13 +99,45 @@ def _load_dataset(path: str | Path) -> dict[str, Any]:
     return result
 
 
-def _regression_metrics(actual: Any, predicted: Any, target_names: tuple[str, ...]) -> dict[str, Any]:
+def _mase_scale(training_actual: Any, *, lag: int = 1) -> Any:
+    """Return per-target MASE denominators fitted on training observations only."""
+
+    np = _require_numpy()
+    if lag < 1:
+        raise ValueError("MASE lag must be >= 1")
+    if training_actual.ndim != 2:
+        raise ValueError("MASE training_actual must be [samples, targets]")
+    if training_actual.shape[0] <= lag:
+        return np.full(training_actual.shape[1], np.nan, dtype=np.float64)
+    return np.mean(
+        np.abs(training_actual[lag:] - training_actual[:-lag]), axis=0
+    )
+
+
+def _regression_metrics(
+    actual: Any,
+    predicted: Any,
+    target_names: tuple[str, ...],
+    *,
+    mase_scale: Any | None = None,
+) -> dict[str, Any]:
     np = _require_numpy()
     error = predicted - actual
     mae = np.mean(np.abs(error), axis=0)
     rmse = np.sqrt(np.mean(error * error, axis=0))
-    denominator = np.mean(np.abs(np.diff(actual, axis=0)), axis=0) if actual.shape[0] > 1 else np.zeros(actual.shape[1])
-    mase = np.divide(mae, denominator, out=np.full_like(mae, np.nan), where=denominator > 0)
+    denominator = (
+        np.asarray(mase_scale, dtype=np.float64)
+        if mase_scale is not None
+        else np.full(actual.shape[1], np.nan, dtype=np.float64)
+    )
+    if denominator.shape != (actual.shape[1],):
+        raise ValueError("MASE scale shape does not match target count")
+    mase = np.divide(
+        mae,
+        denominator,
+        out=np.full_like(mae, np.nan, dtype=np.float64),
+        where=np.isfinite(denominator) & (denominator > 0),
+    )
     return {
         "overall_mae": float(np.mean(mae)),
         "overall_rmse": float(np.mean(rmse)),
@@ -638,6 +670,25 @@ def evaluate_edge_forecast(
         "baseline_selection_split": "val",
         "splits": {},
     }
+    mase_lag = seasonal_period if seasonal_period > 0 else 1
+    train_actual = data["y_train"].astype("float32")
+    train_actual_denorm = _denormalize(
+        train_actual, target_names, data["normalization_ranges"]
+    )
+    normalized_mase_scale = _mase_scale(train_actual, lag=mase_lag)
+    denormalized_mase_scale = _mase_scale(train_actual_denorm, lag=mase_lag)
+    result["mase_scale"] = {
+        "source_split": "train",
+        "lag": mase_lag,
+        "normalized": [
+            None if not math.isfinite(float(value)) else float(value)
+            for value in normalized_mase_scale
+        ],
+        "denormalized": [
+            None if not math.isfinite(float(value)) else float(value)
+            for value in denormalized_mase_scale
+        ],
+    }
     split_candidates: dict[str, dict[str, dict[str, Any]]] = {}
     split_actual: dict[str, Any] = {}
     split_predictions: dict[str, Any] = {}
@@ -658,10 +709,17 @@ def evaluate_edge_forecast(
         split_candidates[split] = candidates
         split_actual[split] = y
         split_predictions[split] = prediction
-        metrics = _regression_metrics(y, prediction, target_names)
+        metrics = _regression_metrics(
+            y, prediction, target_names, mase_scale=normalized_mase_scale
+        )
         y_denorm = _denormalize(y, target_names, data["normalization_ranges"])
         pred_denorm = _denormalize(prediction, target_names, data["normalization_ranges"])
-        metrics["denormalized"] = _regression_metrics(y_denorm, pred_denorm, target_names)
+        metrics["denormalized"] = _regression_metrics(
+            y_denorm,
+            pred_denorm,
+            target_names,
+            mase_scale=denormalized_mase_scale,
+        )
         baseline_metrics: dict[str, Any] = {}
         for name, item in candidates.items():
             if not item["applicable"] or item["predictions"] is None:
@@ -671,11 +729,14 @@ def evaluate_edge_forecast(
                 }
                 continue
             values = item["predictions"]
-            candidate_metrics = _regression_metrics(y, values, target_names)
+            candidate_metrics = _regression_metrics(
+                y, values, target_names, mase_scale=normalized_mase_scale
+            )
             candidate_metrics["denormalized"] = _regression_metrics(
                 y_denorm,
                 _denormalize(values, target_names, data["normalization_ranges"]),
                 target_names,
+                mase_scale=denormalized_mase_scale,
             )
             baseline_metrics[name] = {
                 "applicable": True,
@@ -705,7 +766,10 @@ def evaluate_edge_forecast(
             split_candidates[split], selection, target_names
         )
         selected_metrics = _regression_metrics(
-            split_actual[split], selected_prediction, target_names
+            split_actual[split],
+            selected_prediction,
+            target_names,
+            mase_scale=normalized_mase_scale,
         )
         selected_metrics["denormalized"] = _regression_metrics(
             _denormalize(
@@ -715,6 +779,7 @@ def evaluate_edge_forecast(
                 selected_prediction, target_names, data["normalization_ranges"]
             ),
             target_names,
+            mase_scale=denormalized_mase_scale,
         )
         result["splits"][split]["validation_selected_baseline"] = selected_metrics
 
