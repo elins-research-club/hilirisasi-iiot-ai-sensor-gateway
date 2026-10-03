@@ -1223,8 +1223,15 @@ def run_local_bakeoff_v2(
     tsmixer_epochs: int = 30,
     device: str = "auto",
     rolling_origin: bool = True,
+    evaluate_final_test: bool = False,
 ) -> dict[str, Any]:
-    """Repeated-seed host bakeoff; never promotes a model to production."""
+    """Repeated-seed development bakeoff with an opt-in final-test release gate.
+
+    By default candidate comparison is restricted to train/validation and
+    rolling-origin development evidence. ``evaluate_final_test=True`` is an
+    explicit one-way release action after a candidate/model family is already
+    locked; it must not be used to rank all candidates.
+    """
 
     np = _np()
     output = Path(output_dir)
@@ -1244,37 +1251,46 @@ def run_local_bakeoff_v2(
                 epochs=tsmixer_epochs,
                 device=device,
             )
-            metrics = evaluate_local_forecast_v2(
-                dataset_npz,
-                run_dir / "model.json",
-                run_dir / "metrics.json",
-                device=device,
-            )
-            runs.append(
-                {
-                    "model_type": model_type,
-                    "seed": seed,
-                    "metadata": str(run_dir / "model.json"),
-                    "metrics": str(run_dir / "metrics.json"),
-                    "test_rmse": metrics["splits"]["test"]["overall_rmse"],
-                    "test_mase": metrics["splits"]["test"]["overall_mase"],
-                    "test_rmse_skill_score": metrics["splits"]["test"]["baseline_delta"][
-                        "overall_rmse_skill_score"
-                    ],
-                    "promotion_status": metrics["promotion_gate"]["status"],
-                    "param_count": metadata["param_count"],
-                }
-            )
+            run: dict[str, Any] = {
+                "model_type": model_type,
+                "seed": seed,
+                "metadata": str(run_dir / "model.json"),
+                "validation_rmse": metadata["validation_metrics"]["overall_rmse"],
+                "validation_mase": metadata["validation_metrics"]["overall_mase"],
+                "final_test_evaluated": False,
+                "param_count": metadata["param_count"],
+            }
+            if evaluate_final_test:
+                metrics = evaluate_local_forecast_v2(
+                    dataset_npz,
+                    run_dir / "model.json",
+                    run_dir / "metrics.json",
+                    device=device,
+                )
+                run.update(
+                    {
+                        "metrics": str(run_dir / "metrics.json"),
+                        "final_test_evaluated": True,
+                        "test_rmse": metrics["splits"]["test"]["overall_rmse"],
+                        "test_mase": metrics["splits"]["test"]["overall_mase"],
+                        "test_rmse_skill_score": metrics["splits"]["test"][
+                            "baseline_delta"
+                        ]["overall_rmse_skill_score"],
+                        "promotion_status": metrics["promotion_gate"]["status"],
+                    }
+                )
+            runs.append(run)
     grouped: dict[str, Any] = {}
     for model_type in model_types:
         items = [item for item in runs if item["model_type"] == model_type]
-        rmse = np.asarray([item["test_rmse"] for item in items], dtype=np.float64)
         model_summary: dict[str, Any] = {
             "runs": len(items),
-            "test_rmse_mean": float(np.mean(rmse)),
-            "test_rmse_std": float(np.std(rmse)),
-            "all_runs_promising_host_only": all(
-                item["promotion_status"] == "PROMISING_HOST_ONLY" for item in items
+            "final_test_evaluated": evaluate_final_test,
+            "validation_rmse_mean": float(
+                np.mean([item["validation_rmse"] for item in items])
+            ),
+            "validation_rmse_std": float(
+                np.std([item["validation_rmse"] for item in items])
             ),
         }
         if rolling_origin:
@@ -1285,6 +1301,18 @@ def run_local_bakeoff_v2(
                 tsmixer_epochs=tsmixer_epochs,
                 device=device,
             )
+        if evaluate_final_test:
+            test_rmse = np.asarray([item["test_rmse"] for item in items], dtype=np.float64)
+            model_summary.update(
+                {
+                    "test_rmse_mean": float(np.mean(test_rmse)),
+                    "test_rmse_std": float(np.std(test_rmse)),
+                    "all_runs_promising_host_only": all(
+                        item["promotion_status"] == "PROMISING_HOST_ONLY"
+                        for item in items
+                    ),
+                }
+            )
         grouped[model_type] = model_summary
     summary = {
         "schema": "iiot.ai_sensor.local_forecast_bakeoff.v2",
@@ -1292,9 +1320,10 @@ def run_local_bakeoff_v2(
         "seeds": list(seeds),
         "runs": runs,
         "models": grouped,
+        "final_test_evaluated": evaluate_final_test,
         "selection_policy": (
-            "no production winner; final test is reported separately while rolling-origin "
-            "development evidence is used to assess stability"
+            "candidate comparison uses development evidence only by default; final test "
+            "requires explicit opt-in after candidate lock and cannot create a production winner"
         ),
     }
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

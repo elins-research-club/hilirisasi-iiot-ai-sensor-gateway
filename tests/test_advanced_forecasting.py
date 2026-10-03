@@ -13,6 +13,7 @@ from iiot_ai_sensor_gateway.advanced_forecasting import (
     evaluate_rolling_origin_local_v2,
     evaluate_local_forecast_v2,
     predict_local_forecast_v2,
+    run_local_bakeoff_v2,
     train_local_forecast_v2,
 )
 from iiot_ai_sensor_gateway.forecast_evaluator_v2 import build_forecast_dataset_v2
@@ -173,6 +174,22 @@ class AdvancedForecastingTests(unittest.TestCase):
             self.assertEqual(len(result["runs"]), result["fold_count"])
             self.assertIn("rmse_mean", result["aggregate"])
             self.assertIn("rmse_worst", result["aggregate"])
+
+    def test_bakeoff_does_not_touch_final_test_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = _build_dataset(root)
+            result = run_local_bakeoff_v2(
+                dataset,
+                root / "bakeoff",
+                model_types=("ridge",),
+                seeds=(17,),
+                rolling_origin=False,
+            )
+            self.assertFalse(result["final_test_evaluated"])
+            self.assertFalse(result["runs"][0]["final_test_evaluated"])
+            self.assertNotIn("test_rmse", result["runs"][0])
+            self.assertIn("validation_rmse", result["runs"][0])
 
 
 if __name__ == "__main__":
