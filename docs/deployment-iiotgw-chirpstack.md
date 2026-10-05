@@ -7,16 +7,21 @@ dan tidak dihapus.
 ## Boundary
 
 ```text
-existing:
-ChirpStack -> Node1/Node2 forwarder -> central EMQX -> Telegraf -> Prometheus
-
-new parallel lane:
+current canonical lane:
 ChirpStack -> AI Sensor Gateway -> raw/canonical -> anomaly/forecast shadow
-           -> sensor_ai.v2 -> central EMQX (hanya setelah publish gate)
+           -> sensor_ai.v2 -> central EMQX
+           -> Telegraf json_v2 -> Prometheus
 ```
 
-Runtime baru tidak mengedit `lora_pkt_fwd`, konfigurasi radio, protected
-`chirpstack_to_emqx.py`, atau existing per-node forwarder.
+Legacy per-node backend forwarder sudah retired. Runtime canonical tidak
+mengedit `lora_pkt_fwd`, konfigurasi radio, atau protected
+`chirpstack_to_emqx.py` milik HardProg.
+
+**Payload override 5 Oktober 2026:** Node 2 7-byte mengikuti protected HardProg
+contract `>BhHH` = packet ID, signed temperature x10, humidity x10, current mA
+x100. Untuk known raw binary contracts `5/7/11` byte, raw application payload
+menjadi authority sebelum ChirpStack decoded `object`, karena application
+decoder terbukti dapat stale terhadap firmware.
 
 ### Cold-boot compatibility untuk dua node USB
 
@@ -240,8 +245,12 @@ Raw state/outbox tidak dihapus saat rollback.
 
 Deployment baru hanya dinyatakan E2E bila:
 
-- Node 1 dan Node 2 exact fCnt terlihat pada raw+accepted AI log;
-- current `verify_live_path.sh` tetap PASS;
+- node yang benar-benar tersedia dapat dikorelasikan exact fCnt/event dari
+  ChirpStack sampai canonical output; bila hardware unavailable, synthetic atau
+  captured-source replay harus diberi ID `sim-*` dan **tidak** diklaim sebagai
+  physical proof;
+- `../workspace-ops/gateway-runtime/verify_sensor_ai_v2_prometheus.sh` (dari
+  project root) / equivalent canonical checks tetap PASS;
 - target full test suite PASS;
 - service tidak restart-loop;
 - model hanya infer setelah manifest/cadence/window gate;
