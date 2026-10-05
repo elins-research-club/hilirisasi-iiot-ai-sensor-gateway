@@ -262,7 +262,12 @@ application/{application_id}/device/{dev_eui}/event/up
 - payload format;
 - raw source metadata yang belum aman dipromosikan ke canonical sensor.
 
-Current Node 2 `extra_raw_u16` tetap source metadata. Current Node 1 field
+**Refresh HardProg 5 Oktober 2026:** Node 2 7-byte sekarang terkonfirmasi sebagai
+big-endian `>BhHH`: packet ID (`uint8`), temperature x10 (`int16` signed),
+humidity x10 (`uint16`), dan current mA x100 (`uint16`). Karena semantik current
+sudah eksplisit di source HardProg, dua byte terakhir **bukan lagi** disimpan
+sebagai `extra_raw_u16`; nilainya dipromosikan ke canonical `sensor.current_ma`.
+Payload format live diberi label `bme_current_v1_7byte`. Current Node 1 field
 `no2` juga dipertahankan sebagai `no2_source_unmapped` sampai unit/semantic
 hardware dikonfirmasi; ia tidak diam-diam diubah menjadi `no2_ratio` atau ppm.
 

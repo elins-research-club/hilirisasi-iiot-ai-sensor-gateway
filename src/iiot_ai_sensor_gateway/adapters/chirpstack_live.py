@@ -21,6 +21,7 @@ _ALIASES = {
     "bme_gas_ohm": ("gas_resistance", "gasResistance"),
     "co2_ppm": ("co2", "co2_ppm"),
     "co_ppm": ("co", "co_ppm"),
+    "current_ma": ("current_ma", "current_mA"),
 }
 
 
@@ -56,13 +57,13 @@ def decode_binary_payload(raw: bytes) -> tuple[dict[str, Any], str]:
             "humidity": round(hum_raw / 10.0, 1),
         }, "bme_lite_v1_5byte"
     if len(raw) == 7:
-        raw_id, temp_raw, hum_raw, extra_raw = struct.unpack(">BHHH", raw)
+        raw_id, temp_raw, hum_raw, current_raw = struct.unpack(">BhHH", raw)
         return {
             "id": raw_id,
             "temperature": round(temp_raw / 10.0, 1),
             "humidity": round(hum_raw / 10.0, 1),
-            "extra_raw_u16": extra_raw,
-        }, "bme_lite_v2_7byte"
+            "current_ma": round(current_raw / 100.0, 2),
+        }, "bme_current_v1_7byte"
     if len(raw) == 11:
         raw_id, temp_raw, hum_raw, co2_raw, co_raw, no2_raw = struct.unpack(">BhHHHH", raw)
         return {
@@ -186,8 +187,6 @@ class ChirpStackLiveAdapter:
         }
         if "id" in source_values:
             metadata["source_sensor_id"] = source_values.get("id")
-        if "extra_raw_u16" in source_values:
-            metadata["extra_raw_u16"] = source_values["extra_raw_u16"]
         if "no2" in source_values:
             metadata["no2_source_unmapped"] = source_values["no2"]
 
