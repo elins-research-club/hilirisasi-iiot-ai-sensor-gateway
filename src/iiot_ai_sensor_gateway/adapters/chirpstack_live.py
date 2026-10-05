@@ -79,16 +79,23 @@ def decode_binary_payload(raw: bytes) -> tuple[dict[str, Any], str]:
 
 def _sensor_object(event: dict[str, Any]) -> tuple[dict[str, Any], str]:
     obj = event.get("object")
+    encoded = event.get("data")
+    raw: bytes | None = None
+    if isinstance(encoded, str) and encoded:
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            raw = None
+
+    if raw is not None and len(raw) in {5, 7, 11}:
+        return decode_binary_payload(raw)
+
     if isinstance(obj, dict) and obj:
         return dict(obj), "chirpstack_object"
-    encoded = event.get("data")
-    if not isinstance(encoded, str) or not encoded:
-        raise ValueError("ChirpStack event has neither decoded object nor Base64 data")
-    try:
-        raw = base64.b64decode(encoded, validate=True)
-    except (binascii.Error, ValueError) as exc:
-        raise ValueError("invalid ChirpStack Base64 uplink") from exc
-    return decode_binary_payload(raw)
+
+    if raw is not None:
+        return decode_binary_payload(raw)
+    raise ValueError("ChirpStack event has neither usable decoded object nor Base64 data")
 
 
 def _radio(event: dict[str, Any]) -> RadioMeta:

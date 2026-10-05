@@ -271,6 +271,13 @@ Payload format live diberi label `bme_current_v1_7byte`. Current Node 1 field
 `no2` juga dipertahankan sebagai `no2_source_unmapped` sampai unit/semantic
 hardware dikonfirmasi; ia tidak diam-diam diubah menjadi `no2_ratio` atau ppm.
 
+Untuk raw application payload dengan panjang known contract `5/7/11` byte,
+raw Base64 menjadi authority decoder. ChirpStack `object` tidak boleh
+mengalahkan raw contract tersebut karena application decoder dapat tertinggal
+dari firmware. Evidence 5 Oktober menunjukkan Node 2 raw 7-byte valid sementara
+`object` masih hanya `{"temp":22.5}`. Untuk payload lain, decoded `object`
+tetap didukung dan nilai sensor tetap melewati validator fail-closed.
+
 `sensor_ai.v2` adalah source-agnostic event untuk integration lane tersebut.
 Perbedaan utama terhadap v1:
 
