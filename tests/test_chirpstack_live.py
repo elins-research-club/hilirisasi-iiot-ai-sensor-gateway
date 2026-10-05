@@ -65,14 +65,29 @@ class ChirpStackAdapterTests(unittest.TestCase):
         self.assertEqual(reading.source_metadata["no2_source_unmapped"], 0.12)
         self.assertEqual(reading.radio.rssi, -44.0)
 
-    def test_node2_current_7byte_preserves_unknown_extra(self) -> None:
+    def test_node2_current_7byte_maps_current_ma(self) -> None:
         event = _base(NODE2, 3081)
+        # HardProg >BhHH: id=51, temp=25.7 C, RH=65.7%, current=0.29 mA.
         event["data"] = base64.b64encode(bytes.fromhex("3301010291001d")).decode()
         reading = self.adapter.adapt(event, receive_timestamp="2026-09-25T02:43:13Z")
         self.assertEqual(reading.sensor.temperature_c, 25.7)
         self.assertEqual(reading.sensor.humidity_pct, 65.7)
-        self.assertEqual(reading.source_metadata["extra_raw_u16"], 29)
-        self.assertEqual(reading.source_metadata["payload_format"], "bme_lite_v2_7byte")
+        self.assertEqual(reading.sensor.current_ma, 0.29)
+        self.assertNotIn("extra_raw_u16", reading.source_metadata)
+        self.assertEqual(reading.source_metadata["payload_format"], "bme_current_v1_7byte")
+
+    def test_node2_current_7byte_temperature_is_signed(self) -> None:
+        event = _base(NODE2, 3082)
+        # id=52, temp=-12.3 C, RH=50.0%, current=12.34 mA.
+        event["data"] = base64.b64encode(bytes.fromhex("34ff8501f404d2")).decode()
+        reading = self.adapter.adapt(event, receive_timestamp="2026-10-05T07:00:00Z")
+        self.assertEqual(reading.sensor.temperature_c, -12.3)
+        self.assertEqual(reading.sensor.humidity_pct, 50.0)
+        self.assertEqual(reading.sensor.current_ma, 12.34)
+
+        payload = build_sensor_ai_event_v2(reading)
+        self.assertEqual(payload["sensor"]["current_ma"], 12.34)
+        self.assertEqual(payload["source"]["metadata"]["payload_format"], "bme_current_v1_7byte")
 
     def test_duplicate_is_rejected_by_existing_validator(self) -> None:
         event = _base(NODE1, 10)

@@ -47,7 +47,7 @@ AI utama tetap di Raspberry Pi/laptop/server Python. ESP32-C6 tidak menjalankan 
 ## State Aktual
 
 - Deployment current `iiotgw` memakai source `chirpstack_live.v1` dan publish canonical `sensor_ai.v2` pada `iot/iiotgw/data`; `sensor_ai.v1` tetap compact-origin contract.
-- Provenance HardProg test current: Node 1 RF/LoRaWAN live tetapi nilai sensornya dummy JSON; Node 2 temperature/humidity berasal dari BME fisik dan application payload current 7 byte `>BHHH`.
+- Provenance HardProg test current: Node 1 RF/LoRaWAN live tetapi nilai sensornya dummy JSON; Node 2 contract terbaru 5 Oktober 2026 adalah 7 byte big-endian `>BhHH` = packet ID, temperature x10 signed, humidity x10, current mA x100. Node fisik sedang mati saat contract refresh sehingga source HardProg adalah authority sementara sampai replay/hardware correlation tersedia.
 - Runtime current memiliki durable raw/canonical logs, SQLite event outbox, QoS 1 publish confirmation, retained `sensor_status.v1`, reconnect handling, restart-state restore, dan versioned Pi deployment/rollback.
 - Full cold reboot current sudah diuji; unit `iiot-node-usb-release.service` menangani dua USB-attached ESP/LoRa test nodes agar OTAA rejoin kembali berjalan tanpa mengedit firmware/WM1302/HardProg protected source.
 - Default firmware adalah environment `mock`; environment `hardware` terpisah.
