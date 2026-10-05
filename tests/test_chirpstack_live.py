@@ -69,6 +69,7 @@ class ChirpStackAdapterTests(unittest.TestCase):
         event = _base(NODE2, 3081)
         # HardProg >BhHH: id=51, temp=25.7 C, RH=65.7%, current=0.29 mA.
         event["data"] = base64.b64encode(bytes.fromhex("3301010291001d")).decode()
+        event["object"] = {"temp": 22.5}
         reading = self.adapter.adapt(event, receive_timestamp="2026-09-25T02:43:13Z")
         self.assertEqual(reading.sensor.temperature_c, 25.7)
         self.assertEqual(reading.sensor.humidity_pct, 65.7)
@@ -88,6 +89,16 @@ class ChirpStackAdapterTests(unittest.TestCase):
         payload = build_sensor_ai_event_v2(reading)
         self.assertEqual(payload["sensor"]["current_ma"], 12.34)
         self.assertEqual(payload["source"]["metadata"]["payload_format"], "bme_current_v1_7byte")
+
+    def test_known_binary_contract_wins_over_stale_complete_object(self) -> None:
+        event = _base(NODE2, 3083)
+        event["data"] = base64.b64encode(bytes.fromhex("35012c02580bb8")).decode()
+        event["object"] = {"temp": 22.5, "hum": 44.0}
+        reading = self.adapter.adapt(event, receive_timestamp="2026-10-05T08:10:00Z")
+        self.assertEqual(reading.sensor.temperature_c, 30.0)
+        self.assertEqual(reading.sensor.humidity_pct, 60.0)
+        self.assertEqual(reading.sensor.current_ma, 30.0)
+        self.assertEqual(reading.source_metadata["payload_format"], "bme_current_v1_7byte")
 
     def test_duplicate_is_rejected_by_existing_validator(self) -> None:
         event = _base(NODE1, 10)
