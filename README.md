@@ -1,5 +1,13 @@
 # IIoT AI Sensor Gateway
 
+> **Post-Monev 6 Oktober 2026:** repo ini kembali fokus pada **environmental
+> forecasting + anomaly monitoring**. Sensor health/lifetime sekarang mempunyai
+> repo sendiri `../iiot-sensor-health-ai`. Kebutuhan leak detection/prediction
+> dicatat sebagai arah evaluasi berikutnya pada pipeline existing, bukan subsystem
+> baru current. Tidak ada `sensor_health.v1` maupun `gas_risk.v1` yang dimiliki
+> repo ini. Computer vision berstatus paused dan berada di repo terpisah.
+> Detail: `docs/POST_MONEV_AI_REBASELINE_2026-10-06.md`.
+
 Repo ini menghubungkan node sensor ESP32-C6 dengan preprocessing semantik dan pipeline AI di Raspberry Pi.
 
 ```text
@@ -26,6 +34,12 @@ Keputusan aktif adalah **Gateway-Centric Semantic Preprocessing**:
 - v1 hanya migration/reference.
 
 ADR: `docs/adr/ADR-001-gateway-centric-sensor-preprocessing.md`.
+
+## Post-Monev ownership
+
+Reference/simulation environmental tetap memakai command existing di
+`docs/simulation-reference-pipeline.md`. Sensor-health reference E2E berada di
+`../iiot-sensor-health-ai/scripts/run_reference_e2e.py`.
 
 ## Hardware Target
 

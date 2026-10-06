@@ -1,5 +1,14 @@
 # AGENTS.md — IIOT AI Sensor Gateway
 
+> **POST-MONEV SCOPE OVERRIDE — 6 Oktober 2026:** current AI priorities in this
+> repo are the **existing environmental forecasting/anomaly monitoring pipeline**.
+> Sensor health/lifetime has moved to sibling repo `../iiot-sensor-health-ai` and
+> must not be reimplemented here. Leak detection/prediction is a planned
+> extension that must reuse/evaluate this node-sensor pipeline first; do not
+> create a separate gas-risk subsystem without new evidence. Keep `sensor_ai.v2`
+> live contract backward-compatible. Camera/vision is paused and remains outside
+> this repo.
+
 Instruksi untuk agent yang bekerja di repo `iiot-ai-sensor-gateway`.
 
 ## Scope Repo
@@ -11,6 +20,7 @@ Repo ini khusus node sensor dan AI sensor gateway:
 - receiver serial/replay, parser, validation, dan canonical record;
 - preprocessing Raspberry Pi: resampling, feature extraction, normalization, windowing;
 - dataset adapter, baseline, forecasting, anomaly/drift, dan decision layer;
+- existing forecasting/anomaly/event benchmark remains the environmental lane; leak detection is plan-only until controlled labels exist;
 - kontrak `sensor_ai.v1` compact-origin, `sensor_ai.v2` source-agnostic live, dan `sensor_status.v1` menuju MQTT/backend.
 
 Jangan mengerjakan computer vision, backend/dashboard penuh, broker produksi, OpenClaw runtime, atau deployment produksi final kecuali diminta eksplisit.
