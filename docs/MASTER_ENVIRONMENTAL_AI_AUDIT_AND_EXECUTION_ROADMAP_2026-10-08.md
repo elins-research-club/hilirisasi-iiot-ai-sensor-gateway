@@ -59,3 +59,7 @@ First collect physical-node continuous 60-s observations and raw receive metadat
 ## Audit follow-up and evidence hygiene
 
 This is a **bounded fresh host audit**, not certification of every firmware path, training artifact, local dataset or live service. Outstanding: complete source-by-source audit of firmware and model runtime, fresh firmware mock/hardware builds, end-to-end synthetic replay, device/site benchmark artifact inspection, real source readback and target Pi QA. Mark these explicitly OPEN; do not infer pass from historical docs. Test command must include `PYTHONPATH=src` unless package installed editable. Audit code changes and repeat regression before any promotion; do not use final test for tuning.
+
+### Targeted corrective change in this audit
+
+Cadence inference previously grouped timestamp records only by `node_id`. Two distinct gateways/rooms with a reused node label could be interleaved and produce a spurious cadence estimate or gap count. `dataset_quality.infer_cadence` now scopes the group by available gateway/node/room identity (legacy node-only records remain supported). A regression test injects two independent same-node-label sources offset by 30 seconds and asserts the correct 60-second source cadence. This is an **offline data-methodology fix**, not new model-training evidence.

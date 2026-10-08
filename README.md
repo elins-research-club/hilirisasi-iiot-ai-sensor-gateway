@@ -3,6 +3,7 @@
 **Master audit/next execution authority (8 Oktober 2026):**
 [`docs/MASTER_ENVIRONMENTAL_AI_AUDIT_AND_EXECUTION_ROADMAP_2026-10-08.md`](docs/MASTER_ENVIRONMENTAL_AI_AUDIT_AND_EXECUTION_ROADMAP_2026-10-08.md).
 The roadmap distinguishes host implementation from project-real model validation and target-device/field evidence; it does not authorize deployment.
+Cadence inference now isolates sources by gateway/node/room where available; see the targeted regression in `tests/test_dataset_quality_and_baselines.py`.
 
 > **Post-Monev 6 Oktober 2026:** repo ini kembali fokus pada **environmental
 > forecasting + anomaly monitoring**. Sensor health/lifetime sekarang mempunyai
