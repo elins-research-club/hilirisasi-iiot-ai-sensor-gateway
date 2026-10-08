@@ -59,6 +59,23 @@ class DatasetQualityAndBaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "conflicts"):
             infer_cadence(self._records(3600), declared_interval_sec=60)
 
+    def test_cadence_does_not_merge_reused_node_ids_across_gateways(self):
+        records = self._records(60)
+        for row in records:
+            row.update(gateway_id="gateway-a", room_id="room-a")
+        second = self._records(60)
+        for row in second:
+            row.update(gateway_id="gateway-b", room_id="room-b")
+            # A distinct source sampled at an offset must not be interleaved
+            # into the first source's cadence.
+            row["end_timestamp"] = (
+                datetime.fromisoformat(row["end_timestamp"]) + timedelta(seconds=30)
+            ).isoformat()
+        result = infer_cadence(records + second, declared_interval_sec=60)
+        self.assertEqual(result["cadence_seconds"], 60.0)
+        self.assertEqual(result["observed_delta_count"], 38)
+        self.assertEqual(set(result["nodes"]), {"gateway-a/node-a/room-a", "gateway-b/node-a/room-b"})
+
     def test_active_feature_schema_uses_train_only_and_keeps_targets(self):
         x_train = np.zeros((8, 4, 4), dtype=np.float32)
         x_train[:, :, 1] = np.arange(8, dtype=np.float32)[:, None]

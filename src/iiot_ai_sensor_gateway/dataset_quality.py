@@ -20,7 +20,7 @@ def infer_cadence(
     relative_tolerance: float = 0.10,
     max_irregular_fraction: float = 0.05,
 ) -> dict[str, Any]:
-    """Infer a robust base cadence from per-node end timestamps.
+    """Infer a robust base cadence from per-source end timestamps.
 
     Missing samples may produce integer multiples of the base cadence and are
     reported as gaps rather than irregular cadence. A declared cadence is a
@@ -40,7 +40,12 @@ def infer_cadence(
         timestamp = record.get("end_timestamp")
         if not node_id or not isinstance(timestamp, str):
             raise ValueError("cadence inference requires node_id and end_timestamp")
-        by_node[node_id].append(_parse_dt(timestamp))
+        # Node labels are not globally unique. Do not compute cadence across
+        # unrelated gateways/rooms that happen to reuse the same node ID.
+        gateway_id = str(record.get("gateway_id", "")).strip()
+        room_id = str(record.get("room_id", "")).strip()
+        source_id = "/".join(part for part in (gateway_id, node_id, room_id) if part)
+        by_node[source_id].append(_parse_dt(timestamp))
 
     deltas_by_node: dict[str, list[float]] = {}
     all_deltas: list[float] = []
